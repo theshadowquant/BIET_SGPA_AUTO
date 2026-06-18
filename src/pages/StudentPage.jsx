@@ -10,12 +10,20 @@ import SubjectForm from '../components/SubjectForm';
 import ResultCard from '../components/ResultCard';
 import SubjectTable from '../components/SubjectTable';
 
-import { calculateSGPA, validateMarks, SCORABLE_SUBJECTS } from '../utils/calculateSGPA';
+import { calculateSGPA, validateMarks } from '../utils/calculateSGPA';
 import { checkRateLimit, recordSubmission, formatCooldown } from '../utils/rateLimit';
 import { getOrCreateSession, getDeviceInfo, markSessionAsRecorded } from '../utils/sessionManager';
-import { saveResult, getResultsByUSN, recordVisit } from '../firebase/services';
+import { saveResult, getResultsByUSN, recordVisit, fetchCurriculum } from '../firebase/services';
 
-const INITIAL_MARKS = Object.fromEntries(SCORABLE_SUBJECTS.map(s => [s.key, '']));
+const BRANCHES = [
+  { id: 'cs-ds', name: 'CS&E (Data Science)' },
+  { id: 'cse',   name: 'Computer Science & Engineering' },
+  { id: 'aiml',  name: 'AI & Machine Learning' },
+  { id: 'ise',   name: 'Information Science & Engineering' },
+  { id: 'csd',   name: 'Computer Science & Design' },
+];
+
+const SEMESTERS = [3, 4, 5, 6];
 
 const S = {
   page: { maxWidth: 860, margin: '0 auto', padding: '36px 20px' },
@@ -38,7 +46,11 @@ export default function StudentPage() {
   const [step, setStep]           = useState('form');
   const [studentName, setName]    = useState('');
   const [usn, setUsn]             = useState('');
-  const [marks, setMarks]         = useState(INITIAL_MARKS);
+  const [branch, setBranch]       = useState('cs-ds');
+  const [semester, setSemester]   = useState(4);
+  const [subjects, setSubjects]   = useState([]);
+  const [loadingSubjects, setLoadingSubjects] = useState(true);
+  const [marks, setMarks]         = useState({});
   const [splitMode, setSplitMode] = useState(false);
   const [errors, setErrors]       = useState({});
   const [fieldErrors, setFieldErrors] = useState({});
@@ -48,6 +60,35 @@ export default function StudentPage() {
   const [history, setHistory]     = useState([]);
   const [showHistory, setShowHistory] = useState(false);
   const resultRef = useRef(null);
+
+  // Fetch subjects dynamically from Firestore when branch/semester changes
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      setLoadingSubjects(true);
+      try {
+        const list = await fetchCurriculum(branch, semester);
+        if (active) {
+          setSubjects(list);
+          const initial = {};
+          list.forEach(s => {
+            initial[s.key] = '';
+            initial[`${s.key}_int`] = '';
+            initial[`${s.key}_ext`] = '';
+          });
+          setMarks(initial);
+          setErrors({});
+          setFieldErrors({});
+        }
+      } catch (err) {
+        toast.error('Failed to load curriculum subjects');
+      } finally {
+        if (active) setLoadingSubjects(false);
+      }
+    }
+    load();
+    return () => { active = false; };
+  }, [branch, semester]);
 
   // Track visit on mount (resilient to database creation delay)
   useEffect(() => {
@@ -83,7 +124,7 @@ export default function StudentPage() {
     if (!studentName.trim()) errs.name = 'Name is required';
     if (!usn.trim()) errs.usn = 'USN is required';
     else if (usn.trim().length < 5) errs.usn = 'USN is too short';
-    const { valid, errors: mErrs } = validateMarks(marks);
+    const { valid, errors: mErrs } = validateMarks(marks, subjects);
     if (!valid) { setFieldErrors(mErrs); errs.marks = 'Fix marks'; }
     setErrors(errs);
     return Object.keys(errs).length === 0 && valid;
@@ -95,7 +136,7 @@ export default function StudentPage() {
     const { allowed, remainingMs } = checkRateLimit(usn);
     if (!allowed) { toast.error(`Wait ${formatCooldown(remainingMs)} before resubmitting`); return; }
 
-    const calculated = calculateSGPA(marks);
+    const calculated = calculateSGPA(marks, subjects);
     setResult(calculated);
     setStep('result');
     setSaved(false);
@@ -106,9 +147,16 @@ export default function StudentPage() {
     try {
       const subjectsPayload = {};
       calculated.breakdown.forEach(s => {
-        subjectsPayload[s.key] = { label: s.label, marks: s.marks, gradePoint: s.gradePoint, grade: s.grade, credits: s.credits };
+        subjectsPayload[s.key] = { label: s.label, marks: s.marks, gradePoint: s.gradePoint, grade: s.grade, credits: s.credits, code: s.code };
       });
-      await saveResult({ name: studentName.trim(), usn: usn.trim(), sgpa: calculated.sgpa, subjects: subjectsPayload });
+      await saveResult({ 
+        name: studentName.trim(), 
+        usn: usn.trim(), 
+        branch,
+        semester: Number(semester),
+        sgpa: calculated.sgpa, 
+        subjects: subjectsPayload 
+      });
       recordSubmission(usn);
       setSaved(true);
       toast.success('Result saved!');
@@ -139,7 +187,14 @@ export default function StudentPage() {
   };
 
   const handleReset = () => {
-    setStep('form'); setResult(null); setMarks(INITIAL_MARKS);
+    setStep('form'); setResult(null);
+    const initial = {};
+    subjects.forEach(s => {
+      initial[s.key] = '';
+      initial[`${s.key}_int`] = '';
+      initial[`${s.key}_ext`] = '';
+    });
+    setMarks(initial);
     setErrors({}); setFieldErrors({}); setSaved(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -175,7 +230,7 @@ export default function StudentPage() {
               <h2 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 20 }}>
                 Student Information
               </h2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
                 <div>
                   <label className="form-label" htmlFor="student-name">Full Name</label>
                   <input
@@ -199,6 +254,34 @@ export default function StudentPage() {
                     onBlur={() => fetchHistory(usn)}
                   />
                   {errors.usn && <p style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>{errors.usn}</p>}
+                </div>
+                <div>
+                  <label className="form-label" htmlFor="student-branch">Branch</label>
+                  <select
+                    id="student-branch"
+                    className="input-field"
+                    value={branch}
+                    onChange={e => setBranch(e.target.value)}
+                    style={{ cursor: 'pointer', appearance: 'auto' }}
+                  >
+                    {BRANCHES.map(b => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label" htmlFor="student-semester">Semester</label>
+                  <select
+                    id="student-semester"
+                    className="input-field"
+                    value={semester}
+                    onChange={e => setSemester(Number(e.target.value))}
+                    style={{ cursor: 'pointer', appearance: 'auto' }}
+                  >
+                    {SEMESTERS.map(s => (
+                      <option key={s} value={s}>{s}th Semester</option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
@@ -232,10 +315,23 @@ export default function StudentPage() {
             </AnimatePresence>
 
             {/* Subjects */}
-            <SubjectForm
-              marks={marks} onChange={handleMarkChange} errors={fieldErrors}
-              splitMode={splitMode} onToggleSplit={() => setSplitMode(v => !v)}
-            />
+            {loadingSubjects ? (
+              <div className="card" style={{ padding: 36, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                  <svg className="animate-spin w-8 h-8 text-blue-500" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  <p style={{ fontSize: 13, color: '#94a3b8', fontWeight: 600 }}>Loading curriculum subjects...</p>
+                </div>
+              </div>
+            ) : (
+              <SubjectForm
+                subjects={subjects}
+                marks={marks} onChange={handleMarkChange} errors={fieldErrors}
+                splitMode={splitMode} onToggleSplit={() => setSplitMode(v => !v)}
+              />
+            )}
 
             {/* Submit */}
             <div style={{ textAlign: 'center', paddingTop: 8 }}>
@@ -325,8 +421,12 @@ export default function StudentPage() {
                       <td className="info-value">{studentName.toUpperCase()}</td>
                     </tr>
                     <tr>
+                      <td className="info-label">Branch</td>
+                      <td className="info-value">{(BRANCHES.find(b => b.id === branch)?.name || branch).toUpperCase()}</td>
+                    </tr>
+                    <tr>
                       <td className="info-label">Semester</td>
-                      <td className="info-value">4</td>
+                      <td className="info-value">{semester}</td>
                     </tr>
                   </tbody>
                 </table>

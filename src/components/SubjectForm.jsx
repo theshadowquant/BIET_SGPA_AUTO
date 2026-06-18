@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp, Info } from 'lucide-react';
-import { SUBJECTS, SCORABLE_SUBJECTS } from '../utils/calculateSGPA';
 
 const GRADE_TABLE = [
   { range: '90–100', gp: 10, grade: 'O',  color: '#065f46', bg: '#ecfdf5' },
@@ -11,7 +10,7 @@ const GRADE_TABLE = [
   { range: '< 50',   gp: 0,  grade: 'F',  color: '#991b1b', bg: '#fef2f2' },
 ];
 
-export default function SubjectForm({ marks, onChange, errors, splitMode, onToggleSplit }) {
+export default function SubjectForm({ subjects, marks, onChange, errors, splitMode, onToggleSplit }) {
   const [showGradeTable, setShowGradeTable] = useState(false);
 
   return (
@@ -99,7 +98,7 @@ export default function SubjectForm({ marks, onChange, errors, splitMode, onTogg
 
       {/* Subject rows */}
       <div>
-        {SUBJECTS.map((subject, idx) => (
+        {(subjects || []).map((subject, idx) => (
           <SubjectRow
             key={subject.key}
             subject={subject}
@@ -107,7 +106,7 @@ export default function SubjectForm({ marks, onChange, errors, splitMode, onTogg
             onChange={onChange}
             errors={errors}
             splitMode={splitMode}
-            isLast={idx === SUBJECTS.length - 1}
+            isLast={idx === (subjects || []).length - 1}
           />
         ))}
       </div>

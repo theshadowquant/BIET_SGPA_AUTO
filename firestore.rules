@@ -4,16 +4,18 @@ service cloud.firestore {
 
     // ── results ──────────────────────────────────────────────────────────
     match /results/{id} {
-      // Allow public create with basic field validation
+      // Allow public create with basic field validation (including branch/semester)
       allow create: if
-        request.resource.data.keys().hasAll(['name', 'usn', 'sgpa', 'subjects', 'timestamp'])
+        request.resource.data.keys().hasAll(['name', 'usn', 'sgpa', 'subjects', 'timestamp', 'branch', 'semester'])
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 1
         && request.resource.data.usn is string
         && request.resource.data.usn.size() >= 3
         && request.resource.data.sgpa is number
         && request.resource.data.sgpa >= 0
-        && request.resource.data.sgpa <= 10;
+        && request.resource.data.sgpa <= 10
+        && request.resource.data.branch is string
+        && request.resource.data.semester is number;
 
       // Admin can read, update, delete
       allow read, update, delete: if request.auth != null;
@@ -30,6 +32,12 @@ service cloud.firestore {
       // Allow create once per session (sessionId is the doc ID)
       allow create: if request.resource.data.sessionId is string;
       allow read, update, delete: if request.auth != null;
+    }
+
+    // ── curriculum ────────────────────────────────────────────────────────
+    match /curriculum/{id} {
+      allow read: if true;
+      allow write: if request.auth != null;
     }
   }
 }

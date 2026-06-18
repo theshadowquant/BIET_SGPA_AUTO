@@ -3,21 +3,6 @@
  * Pure function — zero side effects, fully testable
  */
 
-export const SUBJECTS = [
-  { key: 'ada',      code: 'BCSPCC401',  label: 'Analysis and Design of Algorithms',                 alias: 'ADA',           credits: 4, hasLab: false },
-  { key: 'advJava',  code: 'BCSPCC402',  label: 'Advanced Java',                                     alias: 'Adv. Java',     credits: 4, hasLab: false },
-  { key: 'dbms',     code: 'BCSPCC403',  label: 'Database Management Systems',                        alias: 'DBMS',          credits: 4, hasLab: false },
-  { key: 'dms',      code: 'BCSESC404A', label: 'Discrete Mathematical Structures and Graph Theory',  alias: 'DMS',           credits: 3, hasLab: false },
-  { key: 'biology',  code: 'BBTBIO405',  label: 'Biology for Engineers',                             alias: 'Biology',       credits: 2, hasLab: false },
-  { key: 'adaLab',   code: 'BCSPCL406',  label: 'Analysis And Design of Algorithms Lab',              alias: 'ADA Lab',       credits: 1, hasLab: true  },
-  { key: 'gitLab',   code: 'BCSAEC407A', label: 'Version Control with GIT-Lab',                       alias: 'Git Lab',       credits: 1, hasLab: true  },
-  { key: 'evs',      code: 'BHSENV408',  label: 'Environmental Studies',                             alias: 'EVS',           credits: 1, hasLab: false },
-  { key: 'pe',       code: 'BMNPHE409',  label: 'Physical Education',                                alias: 'PE',            credits: 0, hasLab: false },
-];
-
-// Only countable subjects (credits > 0)
-export const SCORABLE_SUBJECTS = SUBJECTS.filter(s => s.credits > 0);
-
 /**
  * Maps marks to VTU grade point
  * @param {number} marks - 0 to 100
@@ -74,6 +59,7 @@ export function strengthLabel(gp) {
  * Main SGPA calculation engine
  *
  * @param {Object} marksMap - { [subjectKey]: number } (0–100 per subject)
+ * @param {Array} subjectsList - The dynamically configured subjects list
  * @returns {{
  *   sgpa: number,
  *   totalCredits: number,
@@ -86,12 +72,15 @@ export function strengthLabel(gp) {
  *   weakSubjects: string[]
  * }}
  */
-export function calculateSGPA(marksMap) {
+export function calculateSGPA(marksMap, subjectsList) {
   let totalWeightedPoints = 0;
   let totalCredits = 0;
   const breakdown = [];
 
-  for (const subject of SCORABLE_SUBJECTS) {
+  const scorable = (subjectsList || []).filter(s => s.credits > 0);
+  const nonCredit = (subjectsList || []).filter(s => s.credits === 0);
+
+  for (const subject of scorable) {
     const marks = Number(marksMap[subject.key] ?? 0);
     const gp = marksToGradePoint(marks);
     const contribution = subject.credits * gp;
@@ -103,7 +92,7 @@ export function calculateSGPA(marksMap) {
       key: subject.key,
       code: subject.code,
       label: subject.label,
-      alias: subject.alias,
+      alias: subject.alias || subject.label,
       credits: subject.credits,
       marks,
       gradePoint: gp,
@@ -113,22 +102,24 @@ export function calculateSGPA(marksMap) {
     });
   }
 
-  // PE (0-credit) — still show in breakdown for completeness
-  const pe = SUBJECTS.find(s => s.key === 'pe');
-  const peMarks = Number(marksMap['pe'] ?? 0);
-  breakdown.push({
-    key: 'pe',
-    code: pe.code,
-    label: pe.label,
-    alias: pe.alias,
-    credits: 0,
-    marks: peMarks,
-    gradePoint: marksToGradePoint(peMarks),
-    grade: gradePointToLetter(marksToGradePoint(peMarks)),
-    strength: 'neutral',
-    contribution: 0,
-    excluded: true,
-  });
+  // Non-credit subjects (0-credit, e.g. PE)
+  for (const subject of nonCredit) {
+    const marks = Number(marksMap[subject.key] ?? 0);
+    const gp = marksToGradePoint(marks);
+    breakdown.push({
+      key: subject.key,
+      code: subject.code,
+      label: subject.label,
+      alias: subject.alias || subject.label,
+      credits: 0,
+      marks,
+      gradePoint: gp,
+      grade: gradePointToLetter(gp),
+      strength: 'neutral',
+      contribution: 0,
+      excluded: true,
+    });
+  }
 
   const sgpa = totalCredits > 0
     ? parseFloat((totalWeightedPoints / totalCredits).toFixed(2))
@@ -152,11 +143,12 @@ export function calculateSGPA(marksMap) {
 /**
  * Validates marks input before saving to Firestore
  * @param {Object} marksMap
+ * @param {Array} subjectsList
  * @returns {{ valid: boolean, errors: Object }}
  */
-export function validateMarks(marksMap) {
+export function validateMarks(marksMap, subjectsList) {
   const errors = {};
-  for (const subject of SUBJECTS) {
+  for (const subject of (subjectsList || [])) {
     const rawValue = marksMap[subject.key];
     const isCredit = subject.credits > 0;
 
@@ -176,3 +168,4 @@ export function validateMarks(marksMap) {
   }
   return { valid: Object.keys(errors).length === 0, errors };
 }
+
