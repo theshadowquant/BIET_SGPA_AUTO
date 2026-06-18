@@ -1,0 +1,35 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── results ──────────────────────────────────────────────────────────
+    match /results/{id} {
+      // Allow public create with basic field validation
+      allow create: if
+        request.resource.data.keys().hasAll(['name', 'usn', 'sgpa', 'subjects', 'timestamp'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.usn is string
+        && request.resource.data.usn.size() >= 3
+        && request.resource.data.sgpa is number
+        && request.resource.data.sgpa >= 0
+        && request.resource.data.sgpa <= 10;
+
+      // Admin can read, update, delete
+      allow read, update, delete: if request.auth != null;
+    }
+
+    // ── analytics/global ─────────────────────────────────────────────────
+    // Open read/write — only stores aggregate counters (no PII)
+    match /analytics/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── visits ────────────────────────────────────────────────────────────
+    match /visits/{sessionId} {
+      // Allow create once per session (sessionId is the doc ID)
+      allow create: if request.resource.data.sessionId is string;
+      allow read, update, delete: if request.auth != null;
+    }
+  }
+}

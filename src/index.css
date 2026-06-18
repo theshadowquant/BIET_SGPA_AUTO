@@ -1,0 +1,511 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+/* ─── Design Tokens ─── */
+:root {
+  --primary: #3b82f6;
+  --primary-dark: #1d4ed8;
+  --primary-light: #eff6ff;
+  --teal: #14b8a6;
+  --teal-light: #f0fdfa;
+  --success: #22c55e;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+
+  --text-900: #0f172a;
+  --text-600: #475569;
+  --text-400: #94a3b8;
+  --border: #e2e8f0;
+  --border-light: #f1f5f9;
+
+  --card-bg: #ffffff;
+  --card-shadow: 0 1px 3px rgba(0,0,0,0.10), 0 4px 16px rgba(59,130,246,0.08);
+  --card-shadow-hover: 0 4px 12px rgba(0,0,0,0.12), 0 8px 24px rgba(59,130,246,0.12);
+  --glass-shadow: 0 8px 32px rgba(59,130,246,0.10);
+}
+
+/* ─── Base ─── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  min-height: 100vh;
+  background: linear-gradient(160deg, #eff6ff 0%, #e0f2fe 40%, #f0fdfa 100%);
+  background-attachment: fixed;
+  color: var(--text-900);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Typography Helpers ─── */
+.text-gradient {
+  background: linear-gradient(135deg, #3b82f6, #14b8a6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Cards ─── */
+.card {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+}
+
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--card-shadow-hover);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+}
+
+/* ─── Navbar Glass ─── */
+.nav-glass {
+  background: rgba(255, 255, 255, 0.90);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.7);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04);
+}
+
+/* ─── Buttons ─── */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 24px;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(59,130,246,0.35), 0 1px 2px rgba(0,0,0,0.08);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(59,130,246,0.45);
+}
+.btn-primary:active:not(:disabled) { transform: translateY(0); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 18px;
+  background: #ffffff;
+  color: #3b82f6;
+  border: 1.5px solid #bfdbfe;
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.btn-secondary:hover:not(:disabled) {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  transform: translateY(-1px);
+}
+.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 14px;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.btn-danger:hover { background: #dc2626; color: white; border-color: #dc2626; }
+
+/* ─── Form Inputs ─── */
+.input-field {
+  width: 100%;
+  padding: 10px 14px;
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 9px;
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  color: #0f172a;
+  outline: none;
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+.input-field:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+}
+.input-field::placeholder { color: #94a3b8; }
+.input-field.error {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239,68,68,0.10);
+}
+
+.form-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+/* ─── Badges ─── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.badge-o        { background: #ecfdf5; color: #065f46; }
+.badge-excellent { background: #f0fdf4; color: #166534; }
+.badge-good     { background: #eff6ff; color: #1e40af; }
+.badge-average  { background: #fef9c3; color: #713f12; }
+.badge-fail     { background: #fef2f2; color: #991b1b; }
+
+/* ─── Table ─── */
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.data-table thead tr {
+  background: #f8fafc;
+}
+.data-table th {
+  padding: 11px 18px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 13px 18px;
+  font-size: 14px;
+  color: #0f172a;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+.data-table tbody tr:hover td { background: #f8fafc; }
+.data-table tbody tr:last-child td { border-bottom: none; }
+
+/* ─── Skeleton ─── */
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ─── Progress bar ─── */
+.progress-bar-wrapper {
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 1s ease;
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* ─── Print & PDF Layout ─── */
+.print-only {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 0; /* Removes default browser header, footer, date, and URL */
+  }
+
+  /* Hide all interactive/web elements like navbars, buttons, and backgrounds */
+  nav, header, footer, .no-print, button, .btn-secondary, .btn-primary, #refresh-btn {
+    display: none !important;
+  }
+
+  /* Force light colors and hide backgrounds for print readability */
+  body, html {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 1.2cm 1.5cm !important; /* Set margins on body instead */
+    width: 100% !important;
+    height: auto !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Format results container to take up full A4 sheet */
+  #pdf-content {
+    display: block !important;
+    position: relative !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: transparent !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  /* Ensure card backgrounds and borders render cleanly */
+  .glass-card, .glass-card-dark, .card {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+    page-break-inside: avoid !important;
+  }
+
+  .data-table {
+    width: 100% !important;
+    page-break-inside: auto !important;
+  }
+
+  .data-table tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto !important;
+  }
+
+  /* ─── Print-Only Layout (Marks Card replica) ─── */
+  .print-only-layout {
+    display: block !important;
+    font-family: 'Times New Roman', Times, serif !important;
+    color: #000000 !important;
+    background: #ffffff !important;
+    width: 100% !important;
+  }
+
+  .print-header-container {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 20px !important;
+    border-bottom: 2px solid #000000 !important;
+    padding-bottom: 8px !important;
+    margin-bottom: 15px !important;
+    width: 100% !important;
+  }
+
+  .print-logo {
+    display: block !important;
+    flex-shrink: 0 !important;
+  }
+  .print-logo svg {
+    display: block !important;
+  }
+
+  .print-header-text {
+    text-align: center !important;
+    flex: 1 !important;
+  }
+
+  .print-header-text h1 {
+    font-size: 17px !important;
+    font-weight: 800 !important;
+    margin: 0 !important;
+    text-transform: uppercase !important;
+    font-family: 'Times New Roman', Times, serif !important;
+    line-height: 1.2 !important;
+  }
+
+  .print-subheader {
+    font-size: 11px !important;
+    font-style: italic !important;
+    margin: 2px 0 0 !important;
+    font-family: 'Times New Roman', Times, serif !important;
+  }
+
+  .print-title {
+    font-size: 13px !important;
+    font-weight: bold !important;
+    margin: 6px 0 0 !important;
+    color: #b91c1c !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+  }
+
+  .print-student-info-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin-bottom: 18px !important;
+    margin-top: 5px !important;
+  }
+
+  .print-student-info-table td {
+    padding: 5px 10px !important;
+    border: 1.5px solid #000000 !important;
+    font-size: 13px !important;
+    text-align: left !important;
+  }
+
+  .info-label {
+    width: 25% !important;
+    font-weight: bold !important;
+    background: #f1f5f9 !important;
+  }
+
+  .info-value {
+    width: 75% !important;
+    font-weight: bold !important;
+  }
+
+  .print-marks-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin-bottom: 14px !important;
+  }
+
+  .print-marks-table th,
+  .print-marks-table td {
+    border: 1.5px solid #000000 !important;
+    padding: 5px 8px !important;
+    font-size: 12px !important;
+    vertical-align: middle !important;
+  }
+
+  .print-marks-table th {
+    background: #cbd5e1 !important;
+    font-weight: bold !important;
+    text-align: center !important;
+    text-transform: uppercase !important;
+    font-size: 11px !important;
+  }
+
+  .subject-title-cell {
+    text-align: left !important;
+    font-weight: 500 !important;
+  }
+
+  .print-sgpa-box {
+    text-align: right !important;
+    font-size: 14px !important;
+    font-weight: bold !important;
+    margin-top: 8px !important;
+    margin-bottom: 16px !important;
+  }
+
+  .print-sgpa-value {
+    font-size: 16px !important;
+    border-bottom: 3px double #000000 !important;
+    padding-bottom: 2px !important;
+    margin-left: 8px !important;
+  }
+
+  .print-nomenclature-section {
+    margin-top: 16px !important;
+    page-break-inside: avoid !important;
+    width: 100% !important;
+  }
+
+  .nomenclature-title {
+    font-size: 12px !important;
+    font-weight: bold !important;
+    margin-bottom: 4px !important;
+    color: #b91c1c !important;
+    text-transform: uppercase !important;
+    text-align: left !important;
+  }
+
+  .print-nomenclature-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin-bottom: 8px !important;
+  }
+
+  .print-nomenclature-table td {
+    border: 1.5px solid #000000 !important;
+    padding: 4px 5px !important;
+    font-size: 10px !important;
+    text-align: center !important;
+  }
+
+  .nom-header {
+    font-weight: bold !important;
+    background: #f1f5f9 !important;
+    text-align: left !important;
+    width: 15% !important;
+  }
+
+  .print-notes {
+    font-size: 10px !important;
+    line-height: 1.3 !important;
+    margin-top: 8px !important;
+    text-align: left !important;
+  }
+
+  .print-notes p {
+    margin: 2px 0 !important;
+  }
+
+  .print-signatures-section {
+    display: flex !important;
+    justify-content: space-between !important;
+    margin-top: 45px !important;
+    page-break-inside: avoid !important;
+    width: 100% !important;
+  }
+
+  .signature-block {
+    text-align: center !important;
+    width: 38% !important;
+  }
+
+  .signature-line {
+    border-top: 1.5px solid #000000 !important;
+    padding-top: 6px !important;
+    font-size: 12px !important;
+    font-weight: bold !important;
+    margin: 0 !important;
+  }
+}
