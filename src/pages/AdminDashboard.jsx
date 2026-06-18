@@ -21,15 +21,63 @@ import { TableSkeleton, ChartSkeleton } from '../components/SkeletonLoader';
 import SGPADistChart from '../components/charts/SGPADistChart';
 import DailyUsageChart from '../components/charts/DailyUsageChart';
 
-const BRANCHES = [
-  { id: 'cs-ds', name: 'CS&E (Data Science)', short: 'CS-DS' },
-  { id: 'cse',   name: 'Computer Science & Engineering', short: 'CSE' },
-  { id: 'aiml',  name: 'AI & Machine Learning', short: 'AIML' },
-  { id: 'ise',   name: 'Information Science & Engineering', short: 'ISE' },
-  { id: 'csd',   name: 'Computer Science & Design', short: 'CSD' },
+// ─── ALL BIET Branches ────────────────────────────────────────────────────────
+export const BRANCHES = [
+  // Computer Science & IT
+  { id: 'cs-ds',  name: 'CS&E (Data Science)',             short: 'CS-DS',  dept: 'CS & IT' },
+  { id: 'cse',    name: 'Computer Science & Engineering',   short: 'CSE',    dept: 'CS & IT' },
+  { id: 'aiml',   name: 'AI & Machine Learning',            short: 'AIML',   dept: 'CS & IT' },
+  { id: 'ise',    name: 'Information Science & Engineering', short: 'ISE',    dept: 'CS & IT' },
+  { id: 'csd',    name: 'Computer Science & Design',        short: 'CSD',    dept: 'CS & IT' },
+  { id: 'csbs',   name: 'Computer Science & Business Sys.', short: 'CSBS',   dept: 'CS & IT' },
+  // Electronics
+  { id: 'ece',    name: 'Electronics & Communication Engg', short: 'ECE',    dept: 'Electronics' },
+  { id: 'eie',    name: 'Electronics & Instrumentation',    short: 'EIE',    dept: 'Electronics' },
+  { id: 'vlsi',   name: 'Electronics (VLSI Design & Tech)', short: 'VLSI',   dept: 'Electronics' },
+  // Electrical
+  { id: 'eee',    name: 'Electrical & Electronics Engg',    short: 'EEE',    dept: 'Electrical' },
+  // Mechanical
+  { id: 'me',     name: 'Mechanical Engineering',           short: 'ME',     dept: 'Mechanical' },
+  { id: 'auto',   name: 'Automobile Engineering',           short: 'AUTO',   dept: 'Mechanical' },
+  { id: 'ipe',    name: 'Industrial & Production Engg',     short: 'IPE',    dept: 'Mechanical' },
+  // Civil
+  { id: 'cv',     name: 'Civil Engineering',                short: 'CIVIL',  dept: 'Civil' },
+  { id: 'et',     name: 'Environmental Engineering',        short: 'ENV',    dept: 'Civil' },
+  // Textile
+  { id: 'tx',     name: 'Textile Technology',               short: 'TEXTILE',dept: 'Textile' },
+  { id: 'txd',    name: 'Textile Design',                   short: 'TXD',    dept: 'Textile' },
+  // Other
+  { id: 'bt',     name: 'Biotechnology',                    short: 'BT',     dept: 'Science' },
+  { id: 'ch',     name: 'Chemical Engineering',             short: 'CHEM',   dept: 'Science' },
 ];
 
-const SEMESTERS = [3, 4, 5, 6];
+export const SEMESTERS = [1, 2, 3, 4, 5, 6, 7, 8];
+
+// Subject type cycle: Theory → Lab → Non-Credit → Theory
+const TYPE_CYCLE = ['theory', 'lab', 'non-credit'];
+
+function getSubjectType(subject) {
+  if (Number(subject.credits) === 0) return 'non-credit';
+  if (subject.hasLab) return 'lab';
+  return 'theory';
+}
+
+function applyType(subject, newType) {
+  switch (newType) {
+    case 'non-credit':
+      return { ...subject, credits: 0, hasLab: false };
+    case 'lab':
+      return { ...subject, credits: subject.credits > 0 ? subject.credits : 1, hasLab: true };
+    default: // theory
+      return { ...subject, hasLab: false };
+  }
+}
+
+const TYPE_STYLES = {
+  'theory':     { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe', label: 'Theory' },
+  'lab':        { bg: '#f0fdf4', color: '#166534', border: '#bbf7d0', label: 'Lab' },
+  'non-credit': { bg: '#fafafa', color: '#94a3b8', border: '#e2e8f0', label: 'Non-Cr' },
+};
 
 const S = {
   page: { maxWidth: 1280, margin: '0 auto', padding: '32px 24px' },
@@ -89,7 +137,7 @@ export default function AdminDashboard() {
   const [leaderboardData, setLeaderboardData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
 
-  // Trigger self-seeding on launch
+  // Trigger self-seeding on launch (only if DB is empty)
   useEffect(() => {
     checkAndSeedCurriculum();
   }, []);
@@ -230,10 +278,14 @@ export default function AdminDashboard() {
     });
   };
 
-  const handleLabToggle = (idx) => {
+  // Cycle through: theory → lab → non-credit → theory
+  const handleTypeCycle = (idx) => {
     setCurricSubjects(prev => {
       const copy = [...prev];
-      copy[idx] = { ...copy[idx], hasLab: !copy[idx].hasLab };
+      const current = getSubjectType(copy[idx]);
+      const currentIndex = TYPE_CYCLE.indexOf(current);
+      const nextType = TYPE_CYCLE[(currentIndex + 1) % TYPE_CYCLE.length];
+      copy[idx] = applyType(copy[idx], nextType);
       return copy;
     });
   };
@@ -251,28 +303,32 @@ export default function AdminDashboard() {
   };
 
   const handleSaveCurriculum = async () => {
+    // Validate: require code, label; credits must be a valid number
     const invalid = curricSubjects.some(s => !s.code.trim() || !s.label.trim() || isNaN(Number(s.credits)));
     if (invalid) {
-      toast.error('Please enter Course Code, Course Title, and valid Credits for all rows.');
+      toast.error('Please fill Course Code, Course Title, and valid Credits for all rows.');
       return;
     }
 
     setCurricSaving(true);
     try {
       const payload = curricSubjects.map(s => ({
-        key: s.key.startsWith('sub_') ? `sub_${s.code.replace(/\s+/g, '_').toLowerCase()}` : s.key,
+        key: s.key && !s.key.startsWith('sub_')
+          ? s.key
+          : `sub_${s.code.replace(/\s+/g, '_').toLowerCase()}`,
         code: s.code.trim().toUpperCase(),
         label: s.label.trim(),
-        alias: s.alias.trim() || s.label.trim(),
+        alias: (s.alias || '').trim() || s.label.trim(),
         credits: Number(s.credits),
         hasLab: Boolean(s.hasLab),
       }));
       await saveCurriculum(curricBranch, curricSem, payload);
-      toast.success('Curriculum updated successfully on Firestore!');
-      // Clear localStorage cache so the updates are fetched live on the homepage
+      toast.success('Curriculum saved to Firestore!');
+      // Bust cache so student page reloads fresh data
       localStorage.removeItem(`curriculum_${curricBranch}_${curricSem}`);
     } catch (err) {
-      toast.error('Failed to update curriculum');
+      console.error('[SaveCurriculum]', err);
+      toast.error(`Failed to save: ${err.message ?? 'Check Firestore permissions'}`);
     } finally {
       setCurricSaving(false);
     }
@@ -299,6 +355,13 @@ export default function AdminDashboard() {
 
   const hasFilters = Object.keys(activeFilters).length > 0;
 
+  // Group branches by department for the dropdown
+  const deptGroups = BRANCHES.reduce((acc, b) => {
+    if (!acc[b.dept]) acc[b.dept] = [];
+    acc[b.dept].push(b);
+    return acc;
+  }, {});
+
   return (
     <div style={S.page}>
 
@@ -318,39 +381,25 @@ export default function AdminDashboard() {
         display: 'flex', gap: 8, borderBottom: '1px solid #e2e8f0',
         marginBottom: 24, paddingBottom: 2, flexWrap: 'wrap'
       }} className="no-print">
-        <button
-          onClick={() => setActiveTab('records')}
-          style={{
-            padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer',
-            fontSize: 14, fontWeight: 600, borderBottom: activeTab === 'records' ? '2.5px solid #2563eb' : '2.5px solid transparent',
-            color: activeTab === 'records' ? '#2563eb' : '#64748b', transition: 'all 0.15s',
-            display: 'flex', alignItems: 'center', gap: 6
-          }}
-        >
-          <Database size={15} /> Student Records
-        </button>
-        <button
-          onClick={() => setActiveTab('curriculum')}
-          style={{
-            padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer',
-            fontSize: 14, fontWeight: 600, borderBottom: activeTab === 'curriculum' ? '2.5px solid #2563eb' : '2.5px solid transparent',
-            color: activeTab === 'curriculum' ? '#2563eb' : '#64748b', transition: 'all 0.15s',
-            display: 'flex', alignItems: 'center', gap: 6
-          }}
-        >
-          <BookOpen size={15} /> Curriculum Manager
-        </button>
-        <button
-          onClick={() => setActiveTab('analytics')}
-          style={{
-            padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer',
-            fontSize: 14, fontWeight: 600, borderBottom: activeTab === 'analytics' ? '2.5px solid #2563eb' : '2.5px solid transparent',
-            color: activeTab === 'analytics' ? '#2563eb' : '#64748b', transition: 'all 0.15s',
-            display: 'flex', alignItems: 'center', gap: 6
-          }}
-        >
-          <BarChart2 size={15} /> SaaS Leaderboards
-        </button>
+        {[
+          { id: 'records',    icon: <Database size={15} />,  label: 'Student Records' },
+          { id: 'curriculum', icon: <BookOpen size={15} />,  label: 'Curriculum Manager' },
+          { id: 'analytics',  icon: <BarChart2 size={15} />, label: 'SaaS Leaderboards' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            style={{
+              padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer',
+              fontSize: 14, fontWeight: 600,
+              borderBottom: activeTab === tab.id ? '2.5px solid #2563eb' : '2.5px solid transparent',
+              color: activeTab === tab.id ? '#2563eb' : '#64748b', transition: 'all 0.15s',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            {tab.icon} {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* ─── TAB 1: STUDENT RECORDS ─── */}
@@ -434,11 +483,15 @@ export default function AdminDashboard() {
                     value={branchFilter}
                     onChange={e => setBranchFilter(e.target.value)}
                     className="input-field"
-                    style={{ fontSize: 13, padding: '7px 10px', width: 160, cursor: 'pointer', appearance: 'auto' }}
+                    style={{ fontSize: 13, padding: '7px 10px', width: 180, cursor: 'pointer', appearance: 'auto' }}
                   >
                     <option value="">All Branches</option>
-                    {BRANCHES.map(b => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
+                    {Object.entries(deptGroups).map(([dept, branches]) => (
+                      <optgroup key={dept} label={dept}>
+                        {branches.map(b => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>
@@ -451,7 +504,7 @@ export default function AdminDashboard() {
                   >
                     <option value="">All Semesters</option>
                     {SEMESTERS.map(s => (
-                      <option key={s} value={s}>{s}th Semester</option>
+                      <option key={s} value={s}>{s}{s === 1 ? 'st' : s === 2 ? 'nd' : s === 3 ? 'rd' : 'th'} Semester</option>
                     ))}
                   </select>
                 </div>
@@ -568,7 +621,7 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* ─── TAB 2: CURRICULUM MANAGER (SaaS spreadsheet style config) ─── */}
+      {/* ─── TAB 2: CURRICULUM MANAGER ─── */}
       {activeTab === 'curriculum' && (
         <div className="card" style={{ padding: 24 }}>
           {/* Class Selectors & Control Action bar */}
@@ -585,10 +638,14 @@ export default function AdminDashboard() {
                   className="input-field"
                   value={curricBranch}
                   onChange={e => setCurricBranch(e.target.value)}
-                  style={{ width: 200, fontSize: 14, cursor: 'pointer', appearance: 'auto' }}
+                  style={{ width: 240, fontSize: 14, cursor: 'pointer', appearance: 'auto' }}
                 >
-                  {BRANCHES.map(b => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
+                  {Object.entries(deptGroups).map(([dept, branches]) => (
+                    <optgroup key={dept} label={dept}>
+                      {branches.map(b => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </div>
@@ -599,15 +656,26 @@ export default function AdminDashboard() {
                   className="input-field"
                   value={curricSem}
                   onChange={e => setCurricSem(Number(e.target.value))}
-                  style={{ width: 130, fontSize: 14, cursor: 'pointer', appearance: 'auto' }}
+                  style={{ width: 140, fontSize: 14, cursor: 'pointer', appearance: 'auto' }}
                 >
                   {SEMESTERS.map(s => (
-                    <option key={s} value={s}>{s}th Semester</option>
+                    <option key={s} value={s}>
+                      {s}{s === 1 ? 'st' : s === 2 ? 'nd' : s === 3 ? 'rd' : 'th'} Semester
+                    </option>
                   ))}
                 </select>
               </div>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={loadCurriculum}
+                disabled={curricLoading}
+                style={{ alignSelf: 'flex-end', fontSize: 13 }}
+              >
+                <RefreshCw size={13} /> Load
+              </button>
             </div>
-            <div style={{ display: 'flex', gap: 8, alignSelf: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, alignSelf: 'flex-end', flexWrap: 'wrap' }}>
               <button
                 type="button"
                 className="btn-secondary text-blue-600 border-blue-200"
@@ -636,6 +704,20 @@ export default function AdminDashboard() {
             </div>
           </div>
 
+          {/* Type legend */}
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+            {Object.entries(TYPE_STYLES).map(([type, style]) => (
+              <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#64748b' }}>
+                <span style={{
+                  padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+                  background: style.bg, color: style.color, border: `1px solid ${style.border}`
+                }}>{style.label}</span>
+                <span>= {type === 'non-credit' ? '0 credits, not counted in SGPA' : type === 'lab' ? 'practical/lab course' : 'lecture-based course'}</span>
+              </div>
+            ))}
+            <span style={{ fontSize: 12, color: '#94a3b8', marginLeft: 'auto' }}>Click TYPE button to cycle: Theory → Lab → Non-Credit</span>
+          </div>
+
           {/* Curriculum Spreadsheet Editor */}
           {curricLoading ? (
             <div style={{ padding: 48, display: 'flex', justifyContent: 'center' }}>
@@ -651,9 +733,12 @@ export default function AdminDashboard() {
             <div style={{ padding: '48px 24px', textAlign: 'center', border: '2px dashed #cbd5e1', borderRadius: 12 }}>
               <BookOpen size={32} style={{ color: '#cbd5e1', margin: '0 auto 12px' }} />
               <p style={{ color: '#94a3b8', fontSize: 14, fontWeight: 500 }}>
-                No curriculum configured for this semester yet.
+                No curriculum configured for this branch/semester yet.
               </p>
-              <button className="btn-secondary text-blue-600 border-blue-200 mt-4" onClick={handleAddSubject}>
+              <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>
+                Click <strong>Load</strong> to fetch from database, or <strong>Add Course</strong> to create one.
+              </p>
+              <button className="btn-secondary text-blue-600 border-blue-200" style={{ marginTop: 16 }} onClick={handleAddSubject}>
                 <Plus size={15} /> Add First Course
               </button>
             </div>
@@ -663,88 +748,116 @@ export default function AdminDashboard() {
                 <thead>
                   <tr>
                     <th style={{ width: '12%' }}>Course Code</th>
-                    <th style={{ width: '40%' }}>Course Title</th>
-                    <th style={{ width: '18%' }}>Short Alias</th>
-                    <th style={{ width: '12%', textAlign: 'center' }}>Credits</th>
-                    <th style={{ width: '10%', textAlign: 'center' }}>Type</th>
-                    <th style={{ width: '8%', textAlign: 'center' }}>Actions</th>
+                    <th style={{ width: '38%' }}>Course Title</th>
+                    <th style={{ width: '16%' }}>Short Alias</th>
+                    <th style={{ width: '10%', textAlign: 'center' }}>Credits</th>
+                    <th style={{ width: '14%', textAlign: 'center' }}>Type</th>
+                    <th style={{ width: '10%', textAlign: 'center' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {curricSubjects.map((sub, idx) => (
-                    <tr key={sub.key}>
-                      <td>
-                        <input
-                          type="text"
-                          placeholder="BCSPCC401"
-                          value={sub.code}
-                          onChange={e => handleSubjectChange(idx, 'code', e.target.value)}
-                          className="input-field font-mono"
-                          style={{ padding: '6px 10px', fontSize: 13 }}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          placeholder="Analysis and Design of Algorithms"
-                          value={sub.label}
-                          onChange={e => handleSubjectChange(idx, 'label', e.target.value)}
-                          className="input-field"
-                          style={{ padding: '6px 10px', fontSize: 13 }}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          placeholder="ADA"
-                          value={sub.alias}
-                          onChange={e => handleSubjectChange(idx, 'alias', e.target.value)}
-                          className="input-field text-slate-500"
-                          style={{ padding: '6px 10px', fontSize: 13 }}
-                        />
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <input
-                          type="number"
-                          min="0"
-                          max="6"
-                          placeholder="Credits"
-                          value={sub.credits}
-                          onChange={e => handleSubjectChange(idx, 'credits', e.target.value)}
-                          className="input-field"
-                          style={{ padding: '6px 6px', fontSize: 13, width: 60, textAlign: 'center' }}
-                        />
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button
-                          type="button"
-                          onClick={() => handleLabToggle(idx)}
-                          disabled={Number(sub.credits) === 0}
-                          style={{
-                            padding: '4px 10px', border: 'none', borderRadius: 6, cursor: Number(sub.credits) === 0 ? 'not-allowed' : 'pointer',
-                            fontSize: 11, fontWeight: 700, transition: 'all 0.15s',
-                            background: Number(sub.credits) === 0 ? '#fafafa' : sub.hasLab ? '#f0fdf4' : '#eff6ff',
-                            color: Number(sub.credits) === 0 ? '#94a3b8' : sub.hasLab ? '#166534' : '#2563eb',
-                            border: Number(sub.credits) === 0 ? '1px solid #e2e8f0' : sub.hasLab ? '1px solid #bbf7d0' : '1px solid #bfdbfe'
-                          }}
-                        >
-                          {Number(sub.credits) === 0 ? 'Non-Cr' : sub.hasLab ? 'Lab' : 'Theory'}
-                        </button>
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button
-                          type="button"
-                          className="btn-danger hover:bg-red-500 hover:text-white"
-                          style={{ padding: '6px 10px' }}
-                          onClick={() => handleDeleteSubject(idx)}
-                        >
-                          <Trash size={12} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {curricSubjects.map((sub, idx) => {
+                    const subType = getSubjectType(sub);
+                    const typeStyle = TYPE_STYLES[subType];
+                    return (
+                      <tr key={sub.key || idx}>
+                        <td>
+                          <input
+                            type="text"
+                            placeholder="BCSPCC401"
+                            value={sub.code}
+                            onChange={e => handleSubjectChange(idx, 'code', e.target.value)}
+                            className="input-field font-mono"
+                            style={{ padding: '6px 10px', fontSize: 13 }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            placeholder="Analysis and Design of Algorithms"
+                            value={sub.label}
+                            onChange={e => handleSubjectChange(idx, 'label', e.target.value)}
+                            className="input-field"
+                            style={{ padding: '6px 10px', fontSize: 13 }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            placeholder="ADA"
+                            value={sub.alias}
+                            onChange={e => handleSubjectChange(idx, 'alias', e.target.value)}
+                            className="input-field text-slate-500"
+                            style={{ padding: '6px 10px', fontSize: 13 }}
+                          />
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <input
+                            type="number"
+                            min="0"
+                            max="6"
+                            placeholder="Cr"
+                            value={sub.credits}
+                            onChange={e => handleSubjectChange(idx, 'credits', e.target.value)}
+                            className="input-field"
+                            style={{ padding: '6px 6px', fontSize: 13, width: 60, textAlign: 'center' }}
+                          />
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          {/* Click to cycle through Theory → Lab → Non-Credit */}
+                          <button
+                            type="button"
+                            onClick={() => handleTypeCycle(idx)}
+                            title="Click to change type"
+                            style={{
+                              padding: '5px 12px', border: 'none', borderRadius: 6, cursor: 'pointer',
+                              fontSize: 11, fontWeight: 700, transition: 'all 0.15s',
+                              background: typeStyle.bg,
+                              color: typeStyle.color,
+                              border: `1px solid ${typeStyle.border}`,
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {typeStyle.label} ↻
+                          </button>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn-danger"
+                            style={{ padding: '6px 10px' }}
+                            onClick={() => handleDeleteSubject(idx)}
+                          >
+                            <Trash size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Footer action */}
+          {curricSubjects.length > 0 && (
+            <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                className="btn-secondary text-blue-600 border-blue-200"
+                onClick={handleAddSubject}
+              >
+                <Plus size={15} /> Add Course
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSaveCurriculum}
+                disabled={curricSaving}
+                style={{ padding: '10px 20px' }}
+              >
+                {curricSaving ? 'Saving…' : <><Save size={15} /> Save Curriculum</>}
+              </button>
             </div>
           )}
         </div>
@@ -757,7 +870,7 @@ export default function AdminDashboard() {
           <div className="card" style={{ padding: 24 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #f1f5f9', paddingBottom: 12, marginBottom: 16 }}>
               <Award size={18} className="text-blue-600" />
-              <p style={{ ...S.sectionTitle, fontSize: 16 }}>Branch performance Leaderboard</p>
+              <p style={{ ...S.sectionTitle, fontSize: 16 }}>Branch Performance Leaderboard</p>
             </div>
             {analyticsLoading ? (
               <TableSkeleton rows={4} />
@@ -791,7 +904,7 @@ export default function AdminDashboard() {
             )}
           </div>
 
-          {/* Subject Analysis (Failed & Outstanding) */}
+          {/* Subject Analysis */}
           <div className="card" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
             {/* Top performing courses */}
             <div>
@@ -941,4 +1054,3 @@ function SGPABadge({ sgpa }) {
     </span>
   );
 }
-

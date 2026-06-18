@@ -16,14 +16,35 @@ import { getOrCreateSession, getDeviceInfo, markSessionAsRecorded } from '../uti
 import { saveResult, getResultsByUSN, recordVisit, fetchCurriculum } from '../firebase/services';
 
 const BRANCHES = [
-  { id: 'cs-ds', name: 'CS&E (Data Science)' },
-  { id: 'cse',   name: 'Computer Science & Engineering' },
-  { id: 'aiml',  name: 'AI & Machine Learning' },
-  { id: 'ise',   name: 'Information Science & Engineering' },
-  { id: 'csd',   name: 'Computer Science & Design' },
+  // Computer Science & IT
+  { id: 'cs-ds',  name: 'CS&E (Data Science)',              dept: 'CS & IT' },
+  { id: 'cse',    name: 'Computer Science & Engineering',    dept: 'CS & IT' },
+  { id: 'aiml',   name: 'AI & Machine Learning',             dept: 'CS & IT' },
+  { id: 'ise',    name: 'Information Science & Engineering', dept: 'CS & IT' },
+  { id: 'csd',    name: 'Computer Science & Design',         dept: 'CS & IT' },
+  { id: 'csbs',   name: 'CS & Business Systems',            dept: 'CS & IT' },
+  // Electronics
+  { id: 'ece',    name: 'Electronics & Communication Engg',  dept: 'Electronics' },
+  { id: 'eie',    name: 'Electronics & Instrumentation',     dept: 'Electronics' },
+  { id: 'vlsi',   name: 'Electronics (VLSI Design & Tech)', dept: 'Electronics' },
+  // Electrical
+  { id: 'eee',    name: 'Electrical & Electronics Engg',     dept: 'Electrical' },
+  // Mechanical
+  { id: 'me',     name: 'Mechanical Engineering',            dept: 'Mechanical' },
+  { id: 'auto',   name: 'Automobile Engineering',            dept: 'Mechanical' },
+  { id: 'ipe',    name: 'Industrial & Production Engg',      dept: 'Mechanical' },
+  // Civil
+  { id: 'cv',     name: 'Civil Engineering',                 dept: 'Civil' },
+  { id: 'et',     name: 'Environmental Engineering',         dept: 'Civil' },
+  // Textile
+  { id: 'tx',     name: 'Textile Technology',                dept: 'Textile' },
+  { id: 'txd',    name: 'Textile Design',                    dept: 'Textile' },
+  // Science
+  { id: 'bt',     name: 'Biotechnology',                     dept: 'Science' },
+  { id: 'ch',     name: 'Chemical Engineering',              dept: 'Science' },
 ];
 
-const SEMESTERS = [3, 4, 5, 6];
+const SEMESTERS = [1, 2, 3, 4, 5, 6, 7, 8];
 
 const S = {
   page: { maxWidth: 860, margin: '0 auto', padding: '36px 20px' },
@@ -264,8 +285,14 @@ export default function StudentPage() {
                     onChange={e => setBranch(e.target.value)}
                     style={{ cursor: 'pointer', appearance: 'auto' }}
                   >
-                    {BRANCHES.map(b => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
+                    {Object.entries(
+                      BRANCHES.reduce((acc, b) => { if (!acc[b.dept]) acc[b.dept] = []; acc[b.dept].push(b); return acc; }, {})
+                    ).map(([dept, branches]) => (
+                      <optgroup key={dept} label={dept}>
+                        {branches.map(b => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>
@@ -279,7 +306,7 @@ export default function StudentPage() {
                     style={{ cursor: 'pointer', appearance: 'auto' }}
                   >
                     {SEMESTERS.map(s => (
-                      <option key={s} value={s}>{s}th Semester</option>
+                      <option key={s} value={s}>{s}{s === 1 ? 'st' : s === 2 ? 'nd' : s === 3 ? 'rd' : 'th'} Semester</option>
                     ))}
                   </select>
                 </div>
