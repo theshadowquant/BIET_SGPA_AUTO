@@ -64,10 +64,9 @@ every filter combination and preserve deterministic continuation.
 - the same three equality variants for USN-prefix, SGPA-range, and combined
   USN-prefix+SGPA-range queries
 
-This adds 15 records-table composite index shapes. The file also retains the
-two pre-existing timestamp index definitions and existing single-field
-overrides, for 17 collection-scope entries total. Automatic single-field
-indexes cover the unfiltered timestamp ordering and seven-day timestamp query.
+This defines 15 records-table composite index shapes. The existing
+single-field overrides are retained; automatic single-field indexes cover the
+unfiltered timestamp ordering and seven-day timestamp query.
 
 ## Security and operational findings
 
