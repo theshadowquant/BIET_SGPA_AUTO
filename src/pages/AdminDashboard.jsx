@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
-  LogOut, Users, BarChart2, TrendingUp, Search,
+  LogOut, Users, BarChart2, TrendingUp,
   Download, Trash2, ChevronLeft, ChevronRight, RefreshCw,
-  X, AlertTriangle, Activity, Database, BookOpen, Plus, Trash, Save, Award, AlertCircle
+  X, AlertTriangle, Activity, Database, BookOpen, Plus, Trash, Save, Award, AlertCircle, Eye, Printer
 } from 'lucide-react';
 
 import { auth } from '../firebase/config';
@@ -21,6 +21,9 @@ import { TableSkeleton, ChartSkeleton } from '../components/SkeletonLoader';
 import SGPADistChart from '../components/charts/SGPADistChart';
 import DailyUsageChart from '../components/charts/DailyUsageChart';
 import { EXPLICIT_TEMPLATES, getExplicitTemplateSubjects } from '../utils/curriculumTemplates';
+import StudentSearch from '../components/StudentSearch';
+
+const ReportCardModal = lazy(() => import('../components/ReportCardModal'));
 
 // ─── ALL BIET Branches ────────────────────────────────────────────────────────
 export const BRANCHES = [
@@ -115,6 +118,7 @@ export default function AdminDashboard() {
   const [currentPage, setCurrentPage]    = useState(1);
 
   // Records Filters
+  const [nameSearch, setNameSearch] = useState('');
   const [usnSearch, setUsnSearch] = useState('');
   const [sgpaMin, setSgpaMin]     = useState('');
   const [sgpaMax, setSgpaMax]     = useState('');
@@ -128,6 +132,8 @@ export default function AdminDashboard() {
   // Deletions
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting]         = useState(false);
+  const [reportTarget, setReportTarget] = useState(null);
+  const [autoPrintReport, setAutoPrintReport] = useState(false);
 
   // Curriculum Management Editor State
   const [curricBranch, setCurricBranch] = useState('cs-ds');
@@ -177,6 +183,7 @@ export default function AdminDashboard() {
     try {
       const { docs, lastDoc: ld, hasMore: hm } = await getPaginatedResults({
         lastDoc: cursor,
+        nameFilter: filters.name ?? '',
         usnFilter: filters.usn ?? '',
         sgpaMin: filters.sgpaMin ?? null,
         sgpaMax: filters.sgpaMax ?? null,
@@ -207,13 +214,14 @@ export default function AdminDashboard() {
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       const f = {};
+      if (nameSearch.trim()) f.name = nameSearch.trim();
       if (usnSearch.trim()) f.usn = usnSearch.trim().toUpperCase();
       if (sgpaMin !== '' && sgpaMax !== '') { f.sgpaMin = Number(sgpaMin); f.sgpaMax = Number(sgpaMax); }
       if (branchFilter) f.branch = branchFilter;
       if (semesterFilter) f.semester = Number(semesterFilter);
       setActiveFilters(f);
     }, DEBOUNCE_MS);
-  }, [usnSearch, sgpaMin, sgpaMax, branchFilter, semesterFilter]);
+  }, [nameSearch, usnSearch, sgpaMin, sgpaMax, branchFilter, semesterFilter]);
 
   useEffect(() => {
     applyFilters();
@@ -222,6 +230,7 @@ export default function AdminDashboard() {
 
   const clearFilters = () => {
     clearTimeout(debounceRef.current);
+    setNameSearch('');
     setUsnSearch('');
     setSgpaMin('');
     setSgpaMax('');
@@ -275,6 +284,20 @@ export default function AdminDashboard() {
     exportToCSV(results, `biet_results_p${currentPage}.csv`);
     toast.success('CSV exported');
   };
+
+  const getBranchName = useCallback((branchId) => (
+    BRANCHES.find(branchItem => branchItem.id === branchId)?.name || branchId || 'CS&E (Data Science)'
+  ), []);
+
+  const openReport = (row, print = false) => {
+    setReportTarget(row);
+    setAutoPrintReport(print);
+  };
+
+  const closeReport = useCallback(() => {
+    setReportTarget(null);
+    setAutoPrintReport(false);
+  }, []);
 
   const handleSignOut = async () => {
     await signOut(auth);
@@ -413,7 +436,7 @@ export default function AdminDashboard() {
   }, {});
 
   return (
-    <div style={S.page}>
+    <div style={S.page} className="admin-dashboard">
 
       {/* ── Page Header ── */}
       <div style={S.header}>
@@ -517,17 +540,12 @@ export default function AdminDashboard() {
 
               {/* Enhanced Dashboard Filters */}
               <div style={S.filterRow}>
-                <div style={{ position: 'relative' }}>
-                  <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                  <input
-                    id="usn-search"
-                    placeholder="Search USN…"
-                    value={usnSearch}
-                    onChange={e => setUsnSearch(e.target.value.toUpperCase())}
-                    className="input-field"
-                    style={{ paddingLeft: 32, width: 140, fontSize: 13, padding: '8px 12px 8px 32px' }}
-                  />
-                </div>
+                <StudentSearch
+                  nameSearch={nameSearch}
+                  usnSearch={usnSearch}
+                  onNameChange={setNameSearch}
+                  onUsnChange={setUsnSearch}
+                />
                 <div>
                   <select
                     value={branchFilter}
@@ -640,9 +658,11 @@ export default function AdminDashboard() {
                             : '—'}
                         </td>
                         <td style={{ textAlign: 'center' }}>
-                          <button className="btn-danger" onClick={() => setDeleteTarget(row)}>
-                            <Trash2 size={13} /> Delete
-                          </button>
+                          <div className="record-actions">
+                            <button className="record-action view" onClick={() => openReport(row)} title={`View ${row.name}'s report`}><Eye size={14} /> View</button>
+                            <button className="record-action print" onClick={() => openReport(row, true)} title={`Print ${row.name}'s report`}><Printer size={14} /> Print</button>
+                            <button className="btn-danger" onClick={() => setDeleteTarget(row)}><Trash2 size={13} /> Delete</button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1080,6 +1100,18 @@ export default function AdminDashboard() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <Suspense fallback={null}>
+        {reportTarget && (
+          <ReportCardModal
+            result={reportTarget}
+            branchName={getBranchName(reportTarget.branch)}
+            onClose={closeReport}
+            autoPrint={autoPrintReport}
+            onAutoPrintComplete={() => setAutoPrintReport(false)}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

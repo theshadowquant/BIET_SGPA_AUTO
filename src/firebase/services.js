@@ -84,17 +84,28 @@ export async function getResultsByUSN(usn, maxResults = 5) {
 }
 
 // ─── Paginated Results (server-side filters + snapshot cursors) ──────────────
-export async function getPaginatedResults({ lastDoc = null, usnFilter = '', sgpaMin = null, sgpaMax = null, branchFilter = '', semesterFilter = null } = {}) {
+function toNameSearchPrefix(value) {
+  return value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+    .map(word => `${word.charAt(0).toLocaleUpperCase()}${word.slice(1)}`).join(' ');
+}
+
+export async function getPaginatedResults({ lastDoc = null, nameFilter = '', usnFilter = '', sgpaMin = null, sgpaMax = null, branchFilter = '', semesterFilter = null } = {}) {
   if (!db) return { docs: [], lastDoc: null, hasMore: false };
 
   const constraints = [];
   const normalizedUsn = usnFilter.toUpperCase().trim();
+  const normalizedName = toNameSearchPrefix(nameFilter);
+  const hasNameFilter = Boolean(normalizedName);
   const hasUsnFilter = Boolean(normalizedUsn);
   const hasMin = sgpaMin !== null && sgpaMin !== '';
   const hasMax = sgpaMax !== null && sgpaMax !== '';
 
   if (branchFilter) constraints.push(where('branch', '==', branchFilter));
   if (semesterFilter !== null && semesterFilter !== '') constraints.push(where('semester', '==', Number(semesterFilter)));
+  if (hasNameFilter) {
+    constraints.push(where('name', '>=', normalizedName));
+    constraints.push(where('name', '<=', `${normalizedName}${USN_PREFIX_END}`));
+  }
   if (hasUsnFilter) {
     constraints.push(where('usn', '>=', normalizedUsn));
     constraints.push(where('usn', '<=', `${normalizedUsn}${USN_PREFIX_END}`));
@@ -110,6 +121,7 @@ export async function getPaginatedResults({ lastDoc = null, usnFilter = '', sgpa
 
   // Firestore requires inequality fields to lead the ordering. The document
   // snapshot cursor makes pagination deterministic even for identical values.
+  if (hasNameFilter) constraints.push(orderBy('name', 'asc'));
   if (hasUsnFilter) constraints.push(orderBy('usn', 'asc'));
   if (hasMin || hasMax) constraints.push(orderBy('sgpa', 'asc'));
   constraints.push(orderBy('timestamp', 'desc'));
