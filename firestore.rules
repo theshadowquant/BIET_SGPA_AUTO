@@ -10,7 +10,7 @@ service cloud.firestore {
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 1
         && request.resource.data.usn is string
-        && request.resource.data.usn.size() >= 3
+        && request.resource.data.usn.matches('^4BD[0-9]{2}[A-Z]{2}[0-9]{3}$')
         && request.resource.data.sgpa is number
         && request.resource.data.sgpa >= 0
         && request.resource.data.sgpa <= 10

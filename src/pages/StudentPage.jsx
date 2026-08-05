@@ -45,6 +45,8 @@ const BRANCHES = [
 ];
 
 const SEMESTERS = [1, 2, 3, 4, 5, 6, 7, 8];
+const USN_PATTERN = /^4BD\d{2}[A-Z]{2}\d{3}$/;
+const USN_FORMAT_MESSAGE = 'Enter a valid USN in the format 4BD24CD001';
 
 const S = {
   page: { maxWidth: 860, margin: '0 auto', padding: '36px 20px' },
@@ -132,12 +134,12 @@ export default function StudentPage() {
   }, [fieldErrors]);
 
   const handleUSN = (v) => {
-    setUsn(v.toUpperCase());
+    setUsn(v.toUpperCase().replace(/\s/g, ''));
     if (errors.usn) setErrors(p => { const n = { ...p }; delete n.usn; return n; });
   };
 
   const fetchHistory = async (usnVal) => {
-    if (!usnVal || usnVal.length < 4) return;
+    if (!USN_PATTERN.test(usnVal.trim())) return;
     try {
       const records = await getResultsByUSN(usnVal);
       setHistory(records);
@@ -149,7 +151,7 @@ export default function StudentPage() {
     const errs = {};
     if (!studentName.trim()) errs.name = 'Name is required';
     if (!usn.trim()) errs.usn = 'USN is required';
-    else if (usn.trim().length < 5) errs.usn = 'USN is too short';
+    else if (!USN_PATTERN.test(usn.trim())) errs.usn = USN_FORMAT_MESSAGE;
     
     if (!branch) errs.branch = 'Branch is required';
     if (!semester) errs.semester = 'Semester is required';
@@ -267,24 +269,29 @@ export default function StudentPage() {
               </h2>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
                 <div>
-                  <label className="form-label" htmlFor="student-name">Full Name</label>
+                  <label className="form-label" htmlFor="student-name">Full Name <span aria-hidden="true" style={{ color: '#dc2626' }}>*</span></label>
                   <input
                     id="student-name"
                     className={`input-field ${errors.name ? 'error' : ''}`}
                     placeholder="e.g. Rahul Sharma"
                     value={studentName}
+                    required
                     onChange={e => { setName(e.target.value); if (errors.name) setErrors(p => { const n = {...p}; delete n.name; return n; }); }}
                   />
                   {errors.name && <p style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>{errors.name}</p>}
                 </div>
                 <div>
-                  <label className="form-label" htmlFor="student-usn">USN</label>
+                  <label className="form-label" htmlFor="student-usn">USN <span aria-hidden="true" style={{ color: '#dc2626' }}>*</span></label>
                   <input
                     id="student-usn"
                     className={`input-field ${errors.usn ? 'error' : ''}`}
                     style={{ fontFamily: 'monospace' }}
-                    placeholder="e.g. 4BD21CS001"
+                    placeholder="e.g. 4BD24CD001"
                     value={usn}
+                    required
+                    maxLength={10}
+                    pattern="4BD[0-9]{2}[A-Za-z]{2}[0-9]{3}"
+                    title="Use the format 4BD24CD001"
                     onChange={e => handleUSN(e.target.value)}
                     onBlur={() => fetchHistory(usn)}
                   />
