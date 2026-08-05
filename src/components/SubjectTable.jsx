@@ -68,7 +68,7 @@ export default function SubjectTable({ breakdown }) {
                 <td className="text-center text-gray-600">{row.credits}</td>
                 <td className="text-center font-semibold text-gray-900">{row.marks}</td>
                 <td className="text-center">
-                  <span className={`badge ${gradeClass(row.gradePoint)}`}>
+                  <span className={`badge ${row.excluded ? 'badge-excellent' : gradeClass(row.gradePoint)}`}>
                     {row.grade}
                   </span>
                 </td>
@@ -77,7 +77,7 @@ export default function SubjectTable({ breakdown }) {
                     className="text-sm font-bold"
                     style={{ color: row.gradePoint === 0 ? '#ef4444' : '#1d4ed8' }}
                   >
-                    {row.gradePoint}
+                    {row.excluded ? '—' : row.gradePoint}
                   </span>
                 </td>
                 <td className="text-center">

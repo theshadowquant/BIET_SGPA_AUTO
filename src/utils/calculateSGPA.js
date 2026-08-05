@@ -118,10 +118,6 @@ export function calculateSGPA(marksMap, subjectsList, { useComponentPassing = fa
   // Non-credit subjects (0-credit, e.g. PE)
   for (const subject of nonCredit) {
     const marks = Number(marksMap[subject.key] ?? 0);
-    const cieMarks = marksMap[`${subject.key}_int`];
-    const seeMarks = marksMap[`${subject.key}_ext`];
-    const usesComponents = useComponentPassing && Number(subject.credits) > 0;
-    const gp = marksToGradePoint(marks, { cieMarks, seeMarks, useComponentPassing: usesComponents });
     breakdown.push({
       key: subject.key,
       code: subject.code,
@@ -129,11 +125,8 @@ export function calculateSGPA(marksMap, subjectsList, { useComponentPassing = fa
       alias: subject.alias || subject.label,
       credits: 0,
       marks,
-      cieMarks: usesComponents ? Number(cieMarks) : undefined,
-      seeMarks: usesComponents ? Number(seeMarks) : undefined,
-      componentFailed: usesComponents && (Number(cieMarks) < 20 || Number(seeMarks) < 18),
-      gradePoint: gp,
-      grade: gradePointToLetter(gp),
+      gradePoint: null,
+      grade: 'PP',
       strength: 'neutral',
       contribution: 0,
       excluded: true,

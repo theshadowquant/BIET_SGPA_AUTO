@@ -840,6 +840,7 @@ export async function getLeaderboardStats() {
       const label = sub.label || code;
       const gp = Number(sub.gradePoint ?? 0);
       const credits = Number(sub.credits ?? 0);
+      if (credits === 0) return;
       
       if (!subjectMap[code]) {
         subjectMap[code] = { code, label, count: 0, fails: 0, outstanding: 0, gpSum: 0, isNonCredit: credits === 0 };
