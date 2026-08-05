@@ -1,43 +1,32 @@
 {
   "indexes": [
-    {
-      "collectionGroup": "results",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "usn", "order": "ASCENDING" },
-        { "fieldPath": "timestamp", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "results",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "sgpa", "order": "ASCENDING" },
-        { "fieldPath": "timestamp", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "results",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "timestamp", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "results",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "timestamp", "order": "DESCENDING" }
-      ]
-    }
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "timestamp", "order": "ASCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "usn", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "sgpa", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "usn", "order": "ASCENDING" }, { "fieldPath": "sgpa", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "branch", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "semester", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "branch", "order": "ASCENDING" }, { "fieldPath": "semester", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "branch", "order": "ASCENDING" }, { "fieldPath": "usn", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "semester", "order": "ASCENDING" }, { "fieldPath": "usn", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "branch", "order": "ASCENDING" }, { "fieldPath": "semester", "order": "ASCENDING" }, { "fieldPath": "usn", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "branch", "order": "ASCENDING" }, { "fieldPath": "sgpa", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "semester", "order": "ASCENDING" }, { "fieldPath": "sgpa", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "branch", "order": "ASCENDING" }, { "fieldPath": "semester", "order": "ASCENDING" }, { "fieldPath": "sgpa", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "branch", "order": "ASCENDING" }, { "fieldPath": "usn", "order": "ASCENDING" }, { "fieldPath": "sgpa", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "semester", "order": "ASCENDING" }, { "fieldPath": "usn", "order": "ASCENDING" }, { "fieldPath": "sgpa", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] },
+    { "collectionGroup": "results", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "branch", "order": "ASCENDING" }, { "fieldPath": "semester", "order": "ASCENDING" }, { "fieldPath": "usn", "order": "ASCENDING" }, { "fieldPath": "sgpa", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }] }
   ],
   "fieldOverrides": [
     {
       "collectionGroup": "results",
       "fieldPath": "usn",
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION" }
-      ]
+      "indexes": [{ "order": "ASCENDING", "queryScope": "COLLECTION" }]
     },
     {
       "collectionGroup": "results",

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { motion } from 'framer-motion';
-import { ShieldCheck, Eye, EyeOff, LogIn, GraduationCap, Mail, Lock } from 'lucide-react';
+import { ShieldCheck, Eye, EyeOff, LogIn, Mail, Lock } from 'lucide-react';
 import { auth } from '../firebase/config';
 import toast from 'react-hot-toast';
 
@@ -12,7 +12,29 @@ export default function AdminLogin() {
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd]   = useState(false);
   const [loading, setLoading]   = useState(false);
+  const [registering, setRegistering] = useState(false);
   const navigate = useNavigate();
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    if (!email || !password) {
+      toast.error('Please enter email and password');
+      return;
+    }
+    setLoading(true);
+    setRegistering(true);
+    try {
+      await createUserWithEmailAndPassword(auth, email.trim(), password);
+      toast.success('Admin account registered! Redirecting...');
+      navigate('/admin/dashboard');
+    } catch (err) {
+      console.error(err);
+      toast.error('Registration failed: ' + (err.message ?? err.code));
+    } finally {
+      setLoading(false);
+      setRegistering(false);
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -80,9 +102,9 @@ export default function AdminLogin() {
         <div className="text-center mb-8">
           <motion.div 
             whileHover={{ scale: 1.05, rotate: 2 }}
-            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 shadow-xl shadow-blue-500/25 mb-4"
+            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white shadow-xl shadow-slate-100/50 mb-4 p-2 border border-slate-100"
           >
-            <GraduationCap className="w-8 h-8 text-white" />
+            <img src="/biet-logo.png" alt="BIET Logo" className="w-12 h-12 object-contain" />
           </motion.div>
           <h1 className="text-3xl font-black tracking-tight text-slate-800" style={{ fontWeight: 900 }}>
             Admin Portal
@@ -171,8 +193,15 @@ export default function AdminLogin() {
               ) : (
                 <LogIn className="w-4 h-4" />
               )}
-              {loading ? 'Signing in...' : 'Sign In'}
             </motion.button>
+            <button
+              type="button"
+              onClick={handleRegister}
+              className="w-full mt-3 py-2.5 px-4 text-xs font-semibold text-blue-600 hover:text-blue-700 bg-blue-50/50 hover:bg-blue-50 border border-dashed border-blue-200 rounded-xl transition-all duration-200 cursor-pointer"
+              disabled={loading}
+            >
+              {registering ? 'Registering...' : '⚠️ Register/Create Admin Account'}
+            </button>
           </form>
         </div>
 

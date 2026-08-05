@@ -10,9 +10,9 @@
  */
 
 import {
-  collection, doc, addDoc, getDoc, setDoc, deleteDoc,
+  collection, doc, getDoc, setDoc,
   query, where, orderBy, limit, startAfter, getDocs,
-  writeBatch, serverTimestamp, increment, onSnapshot,
+  writeBatch, serverTimestamp, increment, onSnapshot, runTransaction,
 } from 'firebase/firestore';
 import { db } from './config';
 
@@ -20,6 +20,17 @@ const RESULTS_COL   = 'results';
 const ANALYTICS_DOC = 'analytics/global';
 const VISITS_COL    = 'visits';
 const PAGE_SIZE     = 20;
+const QUERY_PAGE_SIZE = PAGE_SIZE + 1;
+const USN_PREFIX_END = '\uf8ff';
+const ANALYTICS_PAGE_SIZE = 250;
+
+let analyticsResultsCache = null;
+let analyticsResultsPromise = null;
+
+function invalidateAnalyticsResultsCache() {
+  analyticsResultsCache = null;
+  analyticsResultsPromise = null;
+}
 
 // ─── Timeout helper ───────────────────────────────────────────────────────────
 function withTimeout(promise, ms = 8000, fallback = null) {
@@ -54,6 +65,7 @@ export async function saveResult({ name, usn, branch, semester, sgpa, subjects }
   }, { merge: true });
 
   await batch.commit();
+  invalidateAnalyticsResultsCache();
   return resultRef.id;
 }
 
@@ -71,101 +83,66 @@ export async function getResultsByUSN(usn, maxResults = 5) {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-// ─── Paginated Results (admin with client-side filter fallback) ───────────────
+// ─── Paginated Results (server-side filters + snapshot cursors) ──────────────
 export async function getPaginatedResults({ lastDoc = null, usnFilter = '', sgpaMin = null, sgpaMax = null, branchFilter = '', semesterFilter = null } = {}) {
   if (!db) return { docs: [], lastDoc: null, hasMore: false };
 
-  // If we have branch or semester filters, we fetch the latest 500 records and filter client-side
-  // to avoid requiring compound index setups on the client's Firebase project.
-  if (branchFilter || (semesterFilter !== null && semesterFilter !== '')) {
-    const q = query(
-      collection(db, RESULTS_COL),
-      orderBy('timestamp', 'desc'),
-      limit(500)
-    );
-    const snap = await withTimeout(getDocs(q), 10000, null);
-    if (!snap) return { docs: [], lastDoc: null, hasMore: false };
+  const constraints = [];
+  const normalizedUsn = usnFilter.toUpperCase().trim();
+  const hasUsnFilter = Boolean(normalizedUsn);
+  const hasMin = sgpaMin !== null && sgpaMin !== '';
+  const hasMax = sgpaMax !== null && sgpaMax !== '';
 
-    let filtered = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-    if (usnFilter) {
-      filtered = filtered.filter(r => r.usn.includes(usnFilter.toUpperCase().trim()));
-    }
-    if (branchFilter) {
-      filtered = filtered.filter(r => r.branch === branchFilter);
-    }
-    if (semesterFilter !== null && semesterFilter !== '') {
-      filtered = filtered.filter(r => Number(r.semester) === Number(semesterFilter));
-    }
-    if (sgpaMin !== null && sgpaMin !== '') {
-      filtered = filtered.filter(r => r.sgpa >= parseFloat(sgpaMin));
-    }
-    if (sgpaMax !== null && sgpaMax !== '') {
-      filtered = filtered.filter(r => r.sgpa <= parseFloat(sgpaMax));
-    }
-
-    // Handle memory pagination
-    const startIndex = lastDoc ? filtered.findIndex(r => r.id === lastDoc.id) + 1 : 0;
-    const paginated = filtered.slice(startIndex, startIndex + PAGE_SIZE);
-    const lastPaginatedDoc = paginated[paginated.length - 1] ? { id: paginated[paginated.length - 1].id } : null;
-
-    return {
-      docs: paginated,
-      lastDoc: lastPaginatedDoc,
-      hasMore: startIndex + PAGE_SIZE < filtered.length
-    };
+  if (branchFilter) constraints.push(where('branch', '==', branchFilter));
+  if (semesterFilter !== null && semesterFilter !== '') constraints.push(where('semester', '==', Number(semesterFilter)));
+  if (hasUsnFilter) {
+    constraints.push(where('usn', '>=', normalizedUsn));
+    constraints.push(where('usn', '<=', `${normalizedUsn}${USN_PREFIX_END}`));
+  }
+  if (hasMin) constraints.push(where('sgpa', '>=', Number(sgpaMin)));
+  if (hasMax) constraints.push(where('sgpa', '<=', Number(sgpaMax)));
+  if ((hasMin && !Number.isFinite(Number(sgpaMin))) || (hasMax && !Number.isFinite(Number(sgpaMax)))) {
+    throw new Error('SGPA filters must be valid numbers');
+  }
+  if (hasMin && hasMax && Number(sgpaMin) > Number(sgpaMax)) {
+    throw new Error('Minimum SGPA cannot exceed maximum SGPA');
   }
 
-  // Otherwise, run standard index-safe queries
-  let q;
-  if (usnFilter) {
-    q = query(
-      collection(db, RESULTS_COL),
-      where('usn', '==', usnFilter.toUpperCase().trim()),
-      orderBy('timestamp', 'desc'),
-      limit(PAGE_SIZE)
-    );
-  } else if (sgpaMin !== null && sgpaMax !== null && sgpaMin !== '' && sgpaMax !== '') {
-    q = query(
-      collection(db, RESULTS_COL),
-      where('sgpa', '>=', parseFloat(sgpaMin)),
-      where('sgpa', '<=', parseFloat(sgpaMax)),
-      orderBy('sgpa', 'asc'),
-      ...(lastDoc ? [startAfter(lastDoc)] : []),
-      limit(PAGE_SIZE)
-    );
-  } else {
-    q = query(
-      collection(db, RESULTS_COL),
-      orderBy('timestamp', 'desc'),
-      ...(lastDoc ? [startAfter(lastDoc)] : []),
-      limit(PAGE_SIZE)
-    );
-  }
+  // Firestore requires inequality fields to lead the ordering. The document
+  // snapshot cursor makes pagination deterministic even for identical values.
+  if (hasUsnFilter) constraints.push(orderBy('usn', 'asc'));
+  if (hasMin || hasMax) constraints.push(orderBy('sgpa', 'asc'));
+  constraints.push(orderBy('timestamp', 'desc'));
+  if (lastDoc) constraints.push(startAfter(lastDoc));
+  constraints.push(limit(QUERY_PAGE_SIZE));
+
+  const q = query(collection(db, RESULTS_COL), ...constraints);
 
   const snap = await withTimeout(getDocs(q), 10000, null);
   if (!snap) throw new Error('Query timed out — check Firestore indexes and rules');
 
-  const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  return { docs, lastDoc: snap.docs[snap.docs.length - 1] ?? null, hasMore: snap.docs.length === PAGE_SIZE };
+  const pageDocs = snap.docs.slice(0, PAGE_SIZE);
+  return {
+    docs: pageDocs.map(d => ({ id: d.id, ...d.data() })),
+    lastDoc: pageDocs[pageDocs.length - 1] ?? null,
+    hasMore: snap.docs.length > PAGE_SIZE,
+  };
 }
 
 // ─── Delete Result ─────────────────────────────────────────────────────────────
 export async function deleteResult(id) {
   if (!db) throw new Error('Firebase not initialized');
-  const resultSnap = await getDoc(doc(db, RESULTS_COL, id));
-  if (resultSnap.exists()) {
-    const sgpa = resultSnap.data().sgpa;
-    const batch = writeBatch(db);
-    batch.delete(doc(db, RESULTS_COL, id));
-    batch.set(doc(db, ANALYTICS_DOC), {
+  const resultRef = doc(db, RESULTS_COL, id);
+  await runTransaction(db, async (transaction) => {
+    const resultSnap = await transaction.get(resultRef);
+    if (!resultSnap.exists()) return;
+    transaction.delete(resultRef);
+    transaction.set(doc(db, ANALYTICS_DOC), {
       totalCalculations: increment(-1),
-      sgpaSum: increment(-parseFloat(sgpa)),
+      sgpaSum: increment(-parseFloat(resultSnap.data().sgpa)),
     }, { merge: true });
-    await batch.commit();
-  } else {
-    await deleteDoc(doc(db, RESULTS_COL, id));
-  }
+  });
+  invalidateAnalyticsResultsCache();
 }
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
@@ -244,16 +221,42 @@ export async function getVisitorCount() {
   return snap.data().totalVisitors ?? 0;
 }
 
+async function getAllResultsForAnalytics() {
+  if (analyticsResultsCache) return analyticsResultsCache;
+  if (analyticsResultsPromise) return analyticsResultsPromise;
+
+  analyticsResultsPromise = (async () => {
+    const records = [];
+    let cursor = null;
+    do {
+      const constraints = [orderBy('timestamp', 'desc')];
+      if (cursor) constraints.push(startAfter(cursor));
+      constraints.push(limit(ANALYTICS_PAGE_SIZE));
+      const snap = await withTimeout(getDocs(query(collection(db, RESULTS_COL), ...constraints)), 10000, null);
+      if (!snap) throw new Error('Analytics query timed out');
+      records.push(...snap.docs.map(d => d.data()));
+      cursor = snap.docs[snap.docs.length - 1] ?? null;
+      if (snap.docs.length < ANALYTICS_PAGE_SIZE) break;
+    } while (cursor);
+    analyticsResultsCache = records;
+    return records;
+  })();
+
+  try {
+    return await analyticsResultsPromise;
+  } finally {
+    analyticsResultsPromise = null;
+  }
+}
+
 // ─── SGPA Distribution for chart ─────────────────────────────────────────────
 export async function getSGPADistribution() {
   if (!db) return [];
-  const q = query(collection(db, RESULTS_COL), orderBy('timestamp', 'desc'), limit(200));
-  const snap = await withTimeout(getDocs(q), 8000, null);
-  if (!snap) return [];
+  const records = await getAllResultsForAnalytics();
 
   const buckets = { '< 6.0': 0, '6.0–6.9': 0, '7.0–7.9': 0, '8.0–8.9': 0, '9.0–10': 0 };
-  snap.docs.forEach(d => {
-    const s = d.data().sgpa;
+  records.forEach(record => {
+    const s = record.sgpa;
     if      (s < 6)  buckets['< 6.0']++;
     else if (s < 7)  buckets['6.0–6.9']++;
     else if (s < 8)  buckets['7.0–7.9']++;
@@ -269,7 +272,11 @@ export async function getDailyUsage() {
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-  const q = query(collection(db, RESULTS_COL), orderBy('timestamp', 'desc'), limit(500));
+  const q = query(
+    collection(db, RESULTS_COL),
+    where('timestamp', '>=', sevenDaysAgo),
+    orderBy('timestamp', 'asc')
+  );
   const snap = await withTimeout(getDocs(q), 8000, null);
   if (!snap) return [];
 
@@ -444,6 +451,22 @@ export async function checkAndSeedCurriculum() {
       ],
     };
 
+    // ── AIML Branch Subjects ───────────────────────────────────────────────
+    const AIML_SEMS = {
+      ...CS_DS_SEMS,
+      4: [
+        { key: 'ada',     code: 'BCSPCC401', label: 'Analysis & Design of Algorithms (ADA)',            alias: 'ADA',       credits: 4 },
+        { key: 'ai',      code: 'BAIPCC402', label: 'Artificial Intelligence (AI)',                      alias: 'AI',        credits: 4 },
+        { key: 'dbms',    code: 'BCSPCC403', label: 'Database Management Systems (DBMS)',                  alias: 'DBMS',      credits: 4 },
+        { key: 'adaLab',  code: 'BCSPCL406', label: 'Analysis & Design of Algorithms Lab (ADA Lab)',      alias: 'ADA Lab',   credits: 1, hasLab: true },
+        { key: 'la',      code: 'BSCESC404B',label: 'Linear Algebra (LA)',                               alias: 'LA',        credits: 3 },
+        { key: 'daLab',   code: 'BAIAEC407D',label: 'Python for Data Analytics - Lab (Data Analytics Lab)',alias: 'Data Lab',  credits: 1, hasLab: true },
+        { key: 'bio',     code: 'BBTBIO405', label: 'Biology for Computer Engineers',                    alias: 'Biology',   credits: 2 },
+        { key: 'evs',     code: 'BHSENV408', label: 'Environmental Studies',                          alias: 'EVS',       credits: 1 },
+        { key: 'pe',      code: 'BMNPHE409', label: 'Physical Education',                             alias: 'PE',        credits: 0 },
+      ]
+    };
+
     // ── ECE Branch Subjects ────────────────────────────────────────────────
     const ECE_SEMS = {
       1: SEM1_PHYSICS, 2: SEM2_CHEM,
@@ -458,15 +481,15 @@ export async function checkAndSeedCurriculum() {
         { key: 'pe',      code: 'BMNPHE309', label: 'Physical Education',                             alias: 'PE',        credits: 0 },
       ],
       4: [
-        { key: 'analog',  code: 'BEC401',    label: 'Analog Circuits',                               alias: 'Analog',    credits: 4 },
-        { key: 'control', code: 'BEC402',    label: 'Control Systems',                               alias: 'Control',   credits: 4 },
-        { key: 'comm',    code: 'BEC403',    label: 'Principles of Communication',                    alias: 'Comm',      credits: 4 },
-        { key: 'mp',      code: 'BEC404',    label: 'Microprocessors & Microcontrollers',             alias: 'MP/MC',     credits: 3 },
-        { key: 'bio',     code: 'BBTBIO405', label: 'Biology for Engineers',                          alias: 'Biology',   credits: 2 },
-        { key: 'aLab',    code: 'BECL406',   label: 'Analog Circuits Lab',                            alias: 'Analog Lab',credits: 1, hasLab: true },
-        { key: 'mpLab',   code: 'BECL407',   label: 'Microprocessors Lab',                            alias: 'MP Lab',    credits: 1, hasLab: true },
+        { key: 'emt',     code: 'BECPCC401', label: 'Electromagnetics Theory',                       alias: 'EMT',       credits: 4 },
+        { key: 'pcs',     code: 'BECPCC402', label: 'Principles of Communication Systems',            alias: 'PCS',       credits: 4 },
+        { key: 'cs',      code: 'BECPCC403', label: 'Control Systems',                               alias: 'CS',        credits: 4 },
+        { key: 'mc',      code: 'BECESC404A',label: '8051 Microcontroller',                           alias: 'MC',        credits: 3 },
+        { key: 'bio',     code: 'BBTBIO405', label: 'Biology for Engineers',                          alias: 'BIO',       credits: 2 },
+        { key: 'cLab',    code: 'BECPCL406', label: 'Communication Lab',                            alias: 'C_LAB',     credits: 1, hasLab: true },
+        { key: 'mcLab',   code: 'BECAEC407A',label: '8051 Microcontroller Lab',                       alias: 'MC_LAB',    credits: 1, hasLab: true },
         { key: 'evs',     code: 'BHSENV408', label: 'Environmental Studies',                          alias: 'EVS',       credits: 1 },
-        { key: 'pe',      code: 'BMNPHE409', label: 'Physical Education',                             alias: 'PE',        credits: 0 },
+        { key: 'yoga',    code: 'BMNYOG409', label: 'Yoga',                                           alias: 'Yoga',      credits: 0 },
       ],
       5: [
         { key: 'dsp',     code: 'BEC501',    label: 'Digital Signal Processing',                      alias: 'DSP',       credits: 4 },
@@ -735,7 +758,7 @@ export async function checkAndSeedCurriculum() {
     const ALL_BRANCHES = [
       { id: 'cs-ds', sems: CS_DS_SEMS },
       { id: 'cse',   sems: CS_DS_SEMS },   // Start same, admin edits to customize
-      { id: 'aiml',  sems: CS_DS_SEMS },
+      { id: 'aiml',  sems: AIML_SEMS },
       { id: 'ise',   sems: CS_DS_SEMS },
       { id: 'csd',   sems: CS_DS_SEMS },
       { id: 'csbs',  sems: CS_DS_SEMS },
@@ -777,12 +800,9 @@ export async function checkAndSeedCurriculum() {
 export async function getLeaderboardStats() {
   if (!db) return { branchLeaderboard: [], failedSubjects: [], topPerformingSubjects: [] };
   
-  // Load last 500 records to perform safe in-memory aggregation without compound indexes
-  const q = query(collection(db, RESULTS_COL), orderBy('timestamp', 'desc'), limit(500));
-  const snap = await withTimeout(getDocs(q), 10000, null);
-  if (!snap) return { branchLeaderboard: [], failedSubjects: [], topPerformingSubjects: [] };
-
-  const records = snap.docs.map(d => d.data());
+  // Aggregate the full dataset. The shared cursor-paged reader avoids an
+  // arbitrary record ceiling and de-duplicates reads with SGPA distribution.
+  const records = await getAllResultsForAnalytics();
   
   // 1. Branch Leaderboard (Average SGPA)
   const branchMap = {};
@@ -846,4 +866,3 @@ export async function getLeaderboardStats() {
     topPerformingSubjects,
   };
 }
-

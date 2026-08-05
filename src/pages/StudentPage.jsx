@@ -67,8 +67,8 @@ export default function StudentPage() {
   const [step, setStep]           = useState('form');
   const [studentName, setName]    = useState('');
   const [usn, setUsn]             = useState('');
-  const [branch, setBranch]       = useState('cs-ds');
-  const [semester, setSemester]   = useState(4);
+  const [branch, setBranch]       = useState('');
+  const [semester, setSemester]   = useState('');
   const [subjects, setSubjects]   = useState([]);
   const [loadingSubjects, setLoadingSubjects] = useState(true);
   const [marks, setMarks]         = useState({});
@@ -86,6 +86,11 @@ export default function StudentPage() {
   useEffect(() => {
     let active = true;
     async function load() {
+      if (!branch || !semester) {
+        setSubjects([]);
+        setLoadingSubjects(false);
+        return;
+      }
       setLoadingSubjects(true);
       try {
         const list = await fetchCurriculum(branch, semester);
@@ -145,6 +150,15 @@ export default function StudentPage() {
     if (!studentName.trim()) errs.name = 'Name is required';
     if (!usn.trim()) errs.usn = 'USN is required';
     else if (usn.trim().length < 5) errs.usn = 'USN is too short';
+    
+    if (!branch) errs.branch = 'Branch is required';
+    if (!semester) errs.semester = 'Semester is required';
+
+    if (!branch || !semester) {
+      setErrors(errs);
+      return false;
+    }
+
     const { valid, errors: mErrs } = validateMarks(marks, subjects);
     if (!valid) { setFieldErrors(mErrs); errs.marks = 'Fix marks'; }
     setErrors(errs);
@@ -280,11 +294,12 @@ export default function StudentPage() {
                   <label className="form-label" htmlFor="student-branch">Branch</label>
                   <select
                     id="student-branch"
-                    className="input-field"
+                    className={`input-field ${errors.branch ? 'error' : ''}`}
                     value={branch}
-                    onChange={e => setBranch(e.target.value)}
+                    onChange={e => { setBranch(e.target.value); if (errors.branch) setErrors(p => { const n = {...p}; delete n.branch; return n; }); }}
                     style={{ cursor: 'pointer', appearance: 'auto' }}
                   >
+                    <option value="">Select Branch</option>
                     {Object.entries(
                       BRANCHES.reduce((acc, b) => { if (!acc[b.dept]) acc[b.dept] = []; acc[b.dept].push(b); return acc; }, {})
                     ).map(([dept, branches]) => (
@@ -295,20 +310,23 @@ export default function StudentPage() {
                       </optgroup>
                     ))}
                   </select>
+                  {errors.branch && <p style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>{errors.branch}</p>}
                 </div>
                 <div>
                   <label className="form-label" htmlFor="student-semester">Semester</label>
                   <select
                     id="student-semester"
-                    className="input-field"
+                    className={`input-field ${errors.semester ? 'error' : ''}`}
                     value={semester}
-                    onChange={e => setSemester(Number(e.target.value))}
+                    onChange={e => { const val = e.target.value ? Number(e.target.value) : ''; setSemester(val); if (errors.semester) setErrors(p => { const n = {...p}; delete n.semester; return n; }); }}
                     style={{ cursor: 'pointer', appearance: 'auto' }}
                   >
+                    <option value="">Select Semester</option>
                     {SEMESTERS.map(s => (
                       <option key={s} value={s}>{s}{s === 1 ? 'st' : s === 2 ? 'nd' : s === 3 ? 'rd' : 'th'} Semester</option>
                     ))}
                   </select>
+                  {errors.semester && <p style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>{errors.semester}</p>}
                 </div>
               </div>
             </div>
@@ -342,7 +360,18 @@ export default function StudentPage() {
             </AnimatePresence>
 
             {/* Subjects */}
-            {loadingSubjects ? (
+            {!branch || !semester ? (
+              <div className="card" style={{ padding: '36px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', background: 'rgba(255, 255, 255, 0.7)', borderStyle: 'dashed' }}>
+                <div style={{
+                  width: 48, height: 48, borderRadius: 12, background: '#eff6ff', border: '1px solid #bfdbfe',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12, color: '#2563eb'
+                }}>
+                  <Calculator size={22} />
+                </div>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: '#475569', margin: '0 0 6px' }}>Select Branch & Semester</h3>
+                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0, maxWidth: 300 }}>Please choose your branch and semester above to load your curriculum subjects.</p>
+              </div>
+            ) : loadingSubjects ? (
               <div className="card" style={{ padding: 36, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
                   <svg className="animate-spin w-8 h-8 text-blue-500" fill="none" viewBox="0 0 24 24">
@@ -415,19 +444,7 @@ export default function StudentPage() {
                 {/* Header section matching the 3rd image */}
                 <div className="print-header-container">
                   <div className="print-logo">
-                    <svg width="72" height="72" viewBox="0 0 100 100">
-                      <circle cx="50" cy="50" r="46" fill="none" stroke="#000000" strokeWidth="2.5" />
-                      <circle cx="50" cy="50" r="42" fill="none" stroke="#000000" strokeWidth="1" strokeDasharray="3 2" />
-                      {/* Book representation */}
-                      <path d="M30 65 L50 72 L70 65 L70 45 L50 52 L30 45 Z" fill="#000000" opacity="0.1" />
-                      <path d="M30 45 L50 52 L70 45" fill="none" stroke="#000000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M30 55 L50 62 L70 55" fill="none" stroke="#000000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M30 65 L50 72 L70 65" fill="none" stroke="#000000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      <line x1="50" y1="36" x2="50" y2="72" stroke="#000000" strokeWidth="2" />
-                      {/* Flame representation */}
-                      <path d="M50 30 C47 24, 53 18, 50 12 C47 18, 53 24, 50 30 Z" fill="#000000" />
-                      <text x="50" y="87" fontSize="11" fontWeight="bold" fontFamily="Times New Roman" textAnchor="middle" fill="#000000">BIET</text>
-                    </svg>
+                    <img src="/biet-logo.png" alt="BIET Logo" style={{ width: 72, height: 72, objectFit: 'contain', display: 'block' }} />
                   </div>
                   <div className="print-header-text">
                     <h1>Bapuji Institute of Engineering and Technology, Davanagere</h1>

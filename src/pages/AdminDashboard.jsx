@@ -20,6 +20,7 @@ import { exportToCSV } from '../utils/exportCSV';
 import { TableSkeleton, ChartSkeleton } from '../components/SkeletonLoader';
 import SGPADistChart from '../components/charts/SGPADistChart';
 import DailyUsageChart from '../components/charts/DailyUsageChart';
+import { EXPLICIT_TEMPLATES, getExplicitTemplateSubjects } from '../utils/curriculumTemplates';
 
 // ─── ALL BIET Branches ────────────────────────────────────────────────────────
 export const BRANCHES = [
@@ -121,6 +122,8 @@ export default function AdminDashboard() {
   const [semesterFilter, setSemesterFilter] = useState('');
   const [activeFilters, setActiveFilters] = useState({});
   const debounceRef = useRef(null);
+  const recordsRequestRef = useRef(0);
+  const paginationInFlightRef = useRef(false);
 
   // Deletions
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -169,6 +172,7 @@ export default function AdminDashboard() {
 
   // Student records loading
   const loadPage = useCallback(async (filters = {}, cursor = null) => {
+    const requestId = ++recordsRequestRef.current;
     setTableLoading(true);
     try {
       const { docs, lastDoc: ld, hasMore: hm } = await getPaginatedResults({
@@ -179,10 +183,17 @@ export default function AdminDashboard() {
         branchFilter: filters.branch ?? '',
         semesterFilter: filters.semester ?? null,
       });
+      if (requestId !== recordsRequestRef.current) return false;
       setResults(docs); setLastDoc(ld); setHasMore(hm);
+      return true;
     } catch (err) {
-      toast.error('Failed to load records: ' + (err.message ?? 'Permission denied'));
-    } finally { setTableLoading(false); }
+      if (requestId === recordsRequestRef.current) {
+        toast.error('Failed to load records: ' + (err.message ?? 'Permission denied'));
+      }
+      return false;
+    } finally {
+      if (requestId === recordsRequestRef.current) setTableLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -204,9 +215,13 @@ export default function AdminDashboard() {
     }, DEBOUNCE_MS);
   }, [usnSearch, sgpaMin, sgpaMax, branchFilter, semesterFilter]);
 
-  useEffect(() => { applyFilters(); }, [applyFilters]);
+  useEffect(() => {
+    applyFilters();
+    return () => clearTimeout(debounceRef.current);
+  }, [applyFilters]);
 
   const clearFilters = () => {
+    clearTimeout(debounceRef.current);
     setUsnSearch('');
     setSgpaMin('');
     setSgpaMax('');
@@ -215,16 +230,32 @@ export default function AdminDashboard() {
     setActiveFilters({});
   };
 
-  const handleNextPage = () => {
-    setPageStack(p => [...p, lastDoc]);
-    loadPage(activeFilters, lastDoc);
-    setCurrentPage(p => p + 1);
+  const handleNextPage = async () => {
+    if (!hasMore || !lastDoc || paginationInFlightRef.current) return;
+    paginationInFlightRef.current = true;
+    try {
+      const loaded = await loadPage(activeFilters, lastDoc);
+      if (loaded) {
+        setPageStack(p => [...p, lastDoc]);
+        setCurrentPage(p => p + 1);
+      }
+    } finally {
+      paginationInFlightRef.current = false;
+    }
   };
-  const handlePrevPage = () => {
+  const handlePrevPage = async () => {
+    if (currentPage === 1 || paginationInFlightRef.current) return;
     const ns = [...pageStack]; ns.pop();
-    setPageStack(ns);
-    loadPage(activeFilters, ns[ns.length - 1] ?? null);
-    setCurrentPage(p => p - 1);
+    paginationInFlightRef.current = true;
+    try {
+      const loaded = await loadPage(activeFilters, ns[ns.length - 1] ?? null);
+      if (loaded) {
+        setPageStack(ns);
+        setCurrentPage(p => p - 1);
+      }
+    } finally {
+      paginationInFlightRef.current = false;
+    }
   };
 
   const confirmDelete = async () => {
@@ -300,6 +331,25 @@ export default function AdminDashboard() {
 
   const handleDeleteSubject = (idx) => {
     setCurricSubjects(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleAutofill = (templateId) => {
+    if (!templateId) return;
+    const subjects = getExplicitTemplateSubjects(templateId, curricBranch, curricSem);
+    if (subjects && subjects.length > 0) {
+      const localSubjects = subjects.map(s => ({
+        key: s.key || `sub_${s.code.replace(/\s+/g, '_').toLowerCase()}`,
+        code: s.code,
+        label: s.label,
+        alias: s.alias || s.label,
+        credits: s.credits,
+        hasLab: Boolean(s.hasLab)
+      }));
+      setCurricSubjects(localSubjects);
+      toast.success('Loaded template subjects! Click Save to write to Firestore.');
+    } else {
+      toast.error('No subjects found in this template.');
+    }
   };
 
   const handleSaveCurriculum = async () => {
@@ -432,7 +482,7 @@ export default function AdminDashboard() {
           <div style={S.grid2}>
             <div className="card" style={{ padding: 24 }}>
               <p style={S.sectionTitle}>SGPA Distribution</p>
-              <p style={S.sectionSub}>Last 200 submissions</p>
+              <p style={S.sectionSub}>All submissions</p>
               <div style={{ marginTop: 16 }}>
                 {chartsLoading ? <ChartSkeleton /> : <SGPADistChart data={distData} />}
               </div>
@@ -674,6 +724,24 @@ export default function AdminDashboard() {
               >
                 <RefreshCw size={13} /> Load
               </button>
+              <div>
+                <label className="form-label" htmlFor="curric-template-select" style={{ color: '#2563eb', fontWeight: 600 }}>Autofill Template</label>
+                <select
+                  id="curric-template-select"
+                  className="input-field"
+                  value=""
+                  onChange={e => {
+                    handleAutofill(e.target.value);
+                    e.target.value = ""; // Reset dropdown after selection
+                  }}
+                  style={{ width: 280, fontSize: 14, cursor: 'pointer', appearance: 'auto', border: '1.5px dashed #3b82f6', color: '#2563eb', fontWeight: 600, background: '#f0fdfa' }}
+                >
+                  <option value="" style={{ color: '#64748b' }}>-- Select Predefined Template --</option>
+                  {EXPLICIT_TEMPLATES.map(t => (
+                    <option key={t.id} value={t.id} style={{ color: '#0f172a' }}>{t.label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignSelf: 'flex-end', flexWrap: 'wrap' }}>
               <button
@@ -810,7 +878,7 @@ export default function AdminDashboard() {
                             onClick={() => handleTypeCycle(idx)}
                             title="Click to change type"
                             style={{
-                              padding: '5px 12px', border: 'none', borderRadius: 6, cursor: 'pointer',
+                              padding: '5px 12px', borderRadius: 6, cursor: 'pointer',
                               fontSize: 11, fontWeight: 700, transition: 'all 0.15s',
                               background: typeStyle.bg,
                               color: typeStyle.color,
