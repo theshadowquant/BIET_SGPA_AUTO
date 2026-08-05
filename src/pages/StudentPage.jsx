@@ -273,7 +273,7 @@ export default function StudentPage() {
                   <input
                     id="student-name"
                     className={`input-field ${errors.name ? 'error' : ''}`}
-                    placeholder="e.g. Rahul Sharma"
+                    placeholder="e.g. Rahul Bisalahalli"
                     value={studentName}
                     required
                     onChange={e => { setName(e.target.value); if (errors.name) setErrors(p => { const n = {...p}; delete n.name; return n; }); }}
