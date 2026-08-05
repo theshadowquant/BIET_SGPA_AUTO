@@ -74,7 +74,6 @@ export default function StudentPage() {
   const [subjects, setSubjects]   = useState([]);
   const [loadingSubjects, setLoadingSubjects] = useState(true);
   const [marks, setMarks]         = useState({});
-  const [splitMode, setSplitMode] = useState(false);
   const [errors, setErrors]       = useState({});
   const [fieldErrors, setFieldErrors] = useState({});
   const [result, setResult]       = useState(null);
@@ -161,7 +160,7 @@ export default function StudentPage() {
       return false;
     }
 
-    const { valid, errors: mErrs } = validateMarks(marks, subjects);
+    const { valid, errors: mErrs } = validateMarks(marks, subjects, { useComponentPassing: true });
     if (!valid) { setFieldErrors(mErrs); errs.marks = 'Fix marks'; }
     setErrors(errs);
     return Object.keys(errs).length === 0 && valid;
@@ -173,7 +172,7 @@ export default function StudentPage() {
     const { allowed, remainingMs } = checkRateLimit(usn);
     if (!allowed) { toast.error(`Wait ${formatCooldown(remainingMs)} before resubmitting`); return; }
 
-    const calculated = calculateSGPA(marks, subjects);
+    const calculated = calculateSGPA(marks, subjects, { useComponentPassing: true });
     setResult(calculated);
     setStep('result');
     setSaved(false);
@@ -184,7 +183,13 @@ export default function StudentPage() {
     try {
       const subjectsPayload = {};
       calculated.breakdown.forEach(s => {
-        subjectsPayload[s.key] = { label: s.label, marks: s.marks, gradePoint: s.gradePoint, grade: s.grade, credits: s.credits, code: s.code };
+        const subjectResult = { label: s.label, marks: s.marks, gradePoint: s.gradePoint, grade: s.grade, credits: s.credits, code: s.code };
+        if (s.cieMarks !== undefined && s.seeMarks !== undefined) {
+          subjectResult.cieMarks = s.cieMarks;
+          subjectResult.seeMarks = s.seeMarks;
+          subjectResult.componentFailed = s.componentFailed;
+        }
+        subjectsPayload[s.key] = subjectResult;
       });
       await saveResult({ 
         name: studentName.trim(), 
@@ -392,7 +397,6 @@ export default function StudentPage() {
               <SubjectForm
                 subjects={subjects}
                 marks={marks} onChange={handleMarkChange} errors={fieldErrors}
-                splitMode={splitMode} onToggleSplit={() => setSplitMode(v => !v)}
               />
             )}
 

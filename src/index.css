@@ -571,10 +571,13 @@ body {
 @media print {
   @page { size: A4 portrait; margin: 12mm; }
   body, html { margin: 0 !important; padding: 0 !important; background: #fff !important; }
-  .admin-dashboard, nav, .no-print, .report-modal-actions { display: none !important; }
+  nav, .no-print, .report-modal-actions { display: none !important; }
+  .admin-dashboard > :not(.report-modal-backdrop) { display: none !important; }
   .report-modal-backdrop { position: static !important; display: block !important; overflow: visible !important; padding: 0 !important; background: white !important; backdrop-filter: none !important; }
   .report-modal-shell { width: 100% !important; margin: 0 !important; overflow: visible !important; border: none !important; border-radius: 0 !important; background: white !important; box-shadow: none !important; }
   .report-card-print { display: block !important; padding: 0 !important; background: white !important; color: #000 !important; }
+  .report-card-header { display: grid !important; }
+  .report-footer { display: grid !important; }
   .report-card-header { border-color: #000 !important; }.report-institute, .report-code { color: #000 !important; }
   .report-subject-table th { background: #dbeafe !important; color: #000 !important; border: 1px solid #000 !important; }.report-subject-table td { border: 1px solid #475569 !important; }
   .report-student-details, .report-table-wrap, .report-summary > div { border-color: #475569 !important; }.report-student-details { background: #475569 !important; }.report-student-details > div { background: #fff !important; }

@@ -8,13 +8,18 @@
  * @param {number} marks - 0 to 100
  * @returns {number} gradePoint
  */
-export function marksToGradePoint(marks) {
+export function marksToGradePoint(marks, { cieMarks, seeMarks, useComponentPassing = false } = {}) {
   const m = Number(marks);
+  // In CIE + SEE mode a subject must clear every statutory component as well
+  // as the 50/100 aggregate requirement.
+  if (useComponentPassing && (Number(cieMarks) < 20 || Number(seeMarks) < 18)) return 0;
   if (m >= 90) return 10;
   if (m >= 80) return 9;
   if (m >= 70) return 8;
   if (m >= 60) return 7;
-  if (m >= 50) return 6;
+  if (m >= 55) return 6;
+  if (m >= 50) return 5;
+  if (m >= 40) return 4;
   return 0; // F — Below 50
 }
 
@@ -30,6 +35,8 @@ export function gradePointToLetter(gp) {
     case 8:  return 'A';
     case 7:  return 'B+';
     case 6:  return 'B';
+    case 5:  return 'C';
+    case 4:  return 'P';
     default: return 'F';
   }
 }
@@ -41,7 +48,7 @@ export function gradePointToLetter(gp) {
 export function gradeClass(gp) {
   if (gp >= 9) return 'badge-excellent';
   if (gp >= 7) return 'badge-good';
-  if (gp >= 6) return 'badge-average';
+  if (gp >= 4) return 'badge-average';
   return 'badge-fail';
 }
 
@@ -51,7 +58,7 @@ export function gradeClass(gp) {
  */
 export function strengthLabel(gp) {
   if (gp >= 9) return 'strong';   // highlight green
-  if (gp >= 6) return 'neutral';
+  if (gp >= 4) return 'neutral';
   return 'weak';                   // highlight red (F)
 }
 
@@ -72,7 +79,7 @@ export function strengthLabel(gp) {
  *   weakSubjects: string[]
  * }}
  */
-export function calculateSGPA(marksMap, subjectsList) {
+export function calculateSGPA(marksMap, subjectsList, { useComponentPassing = false } = {}) {
   let totalWeightedPoints = 0;
   let totalCredits = 0;
   const breakdown = [];
@@ -82,7 +89,10 @@ export function calculateSGPA(marksMap, subjectsList) {
 
   for (const subject of scorable) {
     const marks = Number(marksMap[subject.key] ?? 0);
-    const gp = marksToGradePoint(marks);
+    const cieMarks = marksMap[`${subject.key}_int`];
+    const seeMarks = marksMap[`${subject.key}_ext`];
+    const usesComponents = useComponentPassing && Number(subject.credits) > 0;
+    const gp = marksToGradePoint(marks, { cieMarks, seeMarks, useComponentPassing: usesComponents });
     const contribution = subject.credits * gp;
 
     totalWeightedPoints += contribution;
@@ -95,6 +105,9 @@ export function calculateSGPA(marksMap, subjectsList) {
       alias: subject.alias || subject.label,
       credits: subject.credits,
       marks,
+      cieMarks: usesComponents ? Number(cieMarks) : undefined,
+      seeMarks: usesComponents ? Number(seeMarks) : undefined,
+      componentFailed: usesComponents && (Number(cieMarks) < 20 || Number(seeMarks) < 18),
       gradePoint: gp,
       grade: gradePointToLetter(gp),
       strength: strengthLabel(gp),
@@ -105,7 +118,10 @@ export function calculateSGPA(marksMap, subjectsList) {
   // Non-credit subjects (0-credit, e.g. PE)
   for (const subject of nonCredit) {
     const marks = Number(marksMap[subject.key] ?? 0);
-    const gp = marksToGradePoint(marks);
+    const cieMarks = marksMap[`${subject.key}_int`];
+    const seeMarks = marksMap[`${subject.key}_ext`];
+    const usesComponents = useComponentPassing && Number(subject.credits) > 0;
+    const gp = marksToGradePoint(marks, { cieMarks, seeMarks, useComponentPassing: usesComponents });
     breakdown.push({
       key: subject.key,
       code: subject.code,
@@ -113,6 +129,9 @@ export function calculateSGPA(marksMap, subjectsList) {
       alias: subject.alias || subject.label,
       credits: 0,
       marks,
+      cieMarks: usesComponents ? Number(cieMarks) : undefined,
+      seeMarks: usesComponents ? Number(seeMarks) : undefined,
+      componentFailed: usesComponents && (Number(cieMarks) < 20 || Number(seeMarks) < 18),
       gradePoint: gp,
       grade: gradePointToLetter(gp),
       strength: 'neutral',
@@ -146,13 +165,21 @@ export function calculateSGPA(marksMap, subjectsList) {
  * @param {Array} subjectsList
  * @returns {{ valid: boolean, errors: Object }}
  */
-export function validateMarks(marksMap, subjectsList) {
+export function validateMarks(marksMap, subjectsList, { useComponentPassing = false } = {}) {
   const errors = {};
   for (const subject of (subjectsList || [])) {
     const rawValue = marksMap[subject.key];
     const isCredit = subject.credits > 0;
 
     if (isCredit) {
+      if (useComponentPassing) {
+        const cie = Number(marksMap[`${subject.key}_int`]);
+        const see = Number(marksMap[`${subject.key}_ext`]);
+        if (marksMap[`${subject.key}_int`] === '' || marksMap[`${subject.key}_ext`] === '' || !Number.isFinite(cie) || !Number.isFinite(see) || cie < 0 || cie > 50 || see < 0 || see > 50) {
+          errors[subject.key] = 'Enter CIE and SEE marks from 0–50';
+          continue;
+        }
+      }
       const v = Number(rawValue);
       if (rawValue === undefined || rawValue === '' || isNaN(v) || v < 0 || v > 100) {
         errors[subject.key] = `Must be 0–100`;
@@ -168,4 +195,3 @@ export function validateMarks(marksMap, subjectsList) {
   }
   return { valid: Object.keys(errors).length === 0, errors };
 }
-
