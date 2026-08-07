@@ -11,23 +11,22 @@ service cloud.firestore {
         && usn.matches('^4BD[0-9]{2}[A-Z]{2}[0-9]{3}$');
     }
 
-    // Validates a student name: at least 4 chars, contains a space (≥2 words),
-    // only alpha characters and spaces allowed.
+    // Validates a student name: at least 2 chars, letters, spaces, and dots allowed.
+    // Supports single-word Indian names (e.g. Shankar, Malleswari) as well as multi-word names.
     function isValidName(name) {
       return name is string
-        && name.size() >= 4
-        && name.matches('^[A-Za-z].*\\s.*[A-Za-z]$');
+        && name.size() >= 2
+        && name.matches('^[A-Za-z]+([\\s.][A-Za-z]+)*$');
     }
 
     // ── results ──────────────────────────────────────────────────────────────
     match /results/{id} {
       // PUBLIC CREATE — with strict server-side validation
-      // Note: client validation is defence-in-depth; this is the authoritative check.
       allow create: if
         // All required fields must be present
         request.resource.data.keys().hasAll(['name', 'usn', 'sgpa', 'subjects', 'timestamp', 'branch', 'semester'])
 
-        // Name: ≥4 chars, contains a space (enforces ≥2 words), only alpha + spaces
+        // Name: ≥2 chars, valid letter format
         && isValidName(request.resource.data.name)
 
         // USN: strict BIET format
@@ -57,38 +56,43 @@ service cloud.firestore {
     // ── identities ────────────────────────────────────────────────────────────
     // Maps USN → canonical student name (immutable after creation)
     match /identities/{usn} {
-      // Anyone can read (needed for identity conflict check on student page)
       allow read: if true;
 
-      // Public can CREATE a new identity (first registration)
       allow create: if
         request.resource.data.usn is string
         && request.resource.data.name is string
-        && request.resource.data.name.size() >= 4
+        && isValidName(request.resource.data.name)
         && isValidUSN(request.resource.data.usn);
 
-      // Only admin can UPDATE or DELETE identity records
       allow update, delete: if request.auth != null;
     }
 
+    // ── admins ────────────────────────────────────────────────────────────────
+    match /admins/{uid} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // ── audit_logs ────────────────────────────────────────────────────────────
+    match /audit_logs/{id} {
+      allow read: if request.auth != null;
+      allow create: if true;
+      allow update, delete: if false; // Immutable audit log
+    }
+
     // ── settings ─────────────────────────────────────────────────────────────
-    // Admin settings (exam session name/date, etc.)
     match /settings/{docId} {
-      // Public read — exam session info is displayed on student page
       allow read: if true;
-      // Only admin can write settings
       allow write: if request.auth != null;
     }
 
     // ── analytics/global ─────────────────────────────────────────────────────
-    // Open read/write — only stores aggregate counters (no PII)
     match /analytics/{docId} {
       allow read, write: if true;
     }
 
     // ── visits ────────────────────────────────────────────────────────────────
     match /visits/{sessionId} {
-      // Allow create once per session (sessionId is the doc ID)
       allow create: if
         request.resource.data.sessionId is string
         && request.resource.data.sessionId.size() > 0;

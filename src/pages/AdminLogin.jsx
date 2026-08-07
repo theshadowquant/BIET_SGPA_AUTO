@@ -1,61 +1,87 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { motion } from 'framer-motion';
-import { ShieldCheck, Eye, EyeOff, LogIn, Mail, Lock } from 'lucide-react';
+import { ShieldCheck, Eye, EyeOff, LogIn, Mail, Lock, AlertCircle } from 'lucide-react';
 import { auth } from '../firebase/config';
+import { verifyAdminAccess, logAuditEvent } from '../firebase/services';
+import {
+  checkLoginRateLimit,
+  recordFailedLoginAttempt,
+  clearLoginAttempts,
+  formatCooldown,
+} from '../utils/rateLimit';
 import toast from 'react-hot-toast';
-
 
 export default function AdminLogin() {
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd]   = useState(false);
   const [loading, setLoading]   = useState(false);
-  const [registering, setRegistering] = useState(false);
   const navigate = useNavigate();
-
-  const handleRegister = async (e) => {
-    e.preventDefault();
-    if (!email || !password) {
-      toast.error('Please enter email and password');
-      return;
-    }
-    setLoading(true);
-    setRegistering(true);
-    try {
-      await createUserWithEmailAndPassword(auth, email.trim(), password);
-      toast.success('Admin account registered! Redirecting...');
-      navigate('/admin/dashboard');
-    } catch (err) {
-      console.error(err);
-      toast.error('Registration failed: ' + (err.message ?? err.code));
-    } finally {
-      setLoading(false);
-      setRegistering(false);
-    }
-  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
+
+    const rateCheck = checkLoginRateLimit();
+    if (!rateCheck.allowed) {
+      toast.error(`Too many failed attempts. Login locked for ${formatCooldown(rateCheck.lockoutRemainingMs)}.`);
+      return;
+    }
+
     if (!email || !password) {
-      toast.error('Please enter email and password');
+      toast.error('Please enter your administrator email and password');
       return;
     }
 
     setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
-      toast.success('Welcome back, Admin!');
+      // 1. Authenticate with Firebase Auth
+      const userCred = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const user = userCred.user;
+
+      // 2. Strict Role & Active Verification in Firestore admins collection
+      const verification = await verifyAdminAccess(user);
+
+      if (!verification.authorized) {
+        // Revoke Auth Session immediately
+        await signOut(auth);
+        recordFailedLoginAttempt();
+
+        await logAuditEvent({
+          action: 'UNAUTHORIZED_LOGIN_ATTEMPT',
+          actorUid: user.uid,
+          actorEmail: user.email,
+          actorRole: 'NONE',
+          details: { reason: verification.reason },
+        }).catch(() => {});
+
+        toast.error(`Access Denied: ${verification.reason || 'You are not an authorized administrator.'}`);
+        setLoading(false);
+        return;
+      }
+
+      // 3. Clear rate limit lock & log successful login
+      clearLoginAttempts();
+      await logAuditEvent({
+        action: 'ADMIN_LOGIN_SUCCESS',
+        actorUid: user.uid,
+        actorEmail: user.email,
+        actorRole: verification.adminRecord?.role || 'admin',
+        details: { name: verification.adminRecord?.name || '' },
+      }).catch(() => {});
+
+      toast.success(`Welcome back, ${verification.adminRecord?.name || 'Admin'}!`);
       navigate('/admin/dashboard');
     } catch (err) {
+      recordFailedLoginAttempt();
       const msg = {
-        'auth/user-not-found':   'No admin account found with this email',
+        'auth/user-not-found':   'No administrator account found with this email',
         'auth/wrong-password':   'Incorrect password',
-        'auth/invalid-email':    'Invalid email address',
-        'auth/too-many-requests': 'Too many attempts. Try again later.',
-        'auth/invalid-credential': 'Invalid credentials',
-      }[err.code] ?? 'Login failed. Please try again.';
+        'auth/invalid-email':    'Invalid email address format',
+        'auth/too-many-requests': 'Too many failed attempts. Account temporarily locked.',
+        'auth/invalid-credential': 'Invalid administrator credentials',
+      }[err.code] ?? 'Login failed. Verify credentials and try again.';
       toast.error(msg);
     } finally {
       setLoading(false);
@@ -110,18 +136,18 @@ export default function AdminLogin() {
             Admin Portal
           </h1>
           <p className="text-sm text-slate-500 mt-1.5 font-medium tracking-wide">
-            BIET Analytics Dashboard
+            BIET Education System Management
           </p>
         </div>
 
         {/* Login Card */}
         <div className="bg-white/70 backdrop-blur-xl border border-white/60 shadow-[0_24px_70px_-15px_rgba(59,130,246,0.12)] rounded-3xl p-8 md:p-10">
           
-          {/* Status Message */}
+          {/* Security Status Banner */}
           <div className="flex items-start gap-3 mb-8 px-4 py-3.5 rounded-2xl bg-blue-50/50 border border-blue-100/50">
             <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
             <p className="text-xs text-blue-800 font-semibold leading-relaxed">
-              Restricted access — authorized administrators only
+              Restricted Enterprise Access — Authorized Administrators Only
             </p>
           </div>
 
@@ -139,6 +165,7 @@ export default function AdminLogin() {
                   id="admin-email"
                   type="email"
                   autoComplete="email"
+                  required
                   className="w-full pl-11 pr-4 py-3 bg-white/50 border border-slate-200/80 rounded-xl font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all duration-200"
                   placeholder="admin@biet.edu.in"
                   value={email}
@@ -160,6 +187,7 @@ export default function AdminLogin() {
                   id="admin-password"
                   type={showPwd ? 'text' : 'password'}
                   autoComplete="current-password"
+                  required
                   className="w-full pl-11 pr-11 py-3 bg-white/50 border border-slate-200/80 rounded-xl font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all duration-200"
                   placeholder="••••••••"
                   value={password}
@@ -191,23 +219,18 @@ export default function AdminLogin() {
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                 </svg>
               ) : (
-                <LogIn className="w-4 h-4" />
+                <>
+                  <LogIn className="w-4 h-4" />
+                  <span>Secure Sign In</span>
+                </>
               )}
             </motion.button>
-            <button
-              type="button"
-              onClick={handleRegister}
-              className="w-full mt-3 py-2.5 px-4 text-xs font-semibold text-blue-600 hover:text-blue-700 bg-blue-50/50 hover:bg-blue-50 border border-dashed border-blue-200 rounded-xl transition-all duration-200 cursor-pointer"
-              disabled={loading}
-            >
-              {registering ? 'Registering...' : '⚠️ Register/Create Admin Account'}
-            </button>
           </form>
         </div>
 
         <p className="text-center text-xs font-semibold text-slate-400 mt-8 leading-relaxed px-4">
           Bapuji Institute of Engineering &amp; Technology<br />
-          <span className="text-[10px] text-slate-400/80 font-medium mt-1 block">Autonomous · VTU Affiliated</span>
+          <span className="text-[10px] text-slate-400/80 font-medium mt-1 block">Autonomous · VTU Affiliated · Enterprise Security Enforced</span>
         </p>
       </motion.div>
     </div>

@@ -17,12 +17,15 @@ import {
   writeBatch, serverTimestamp, increment, onSnapshot, runTransaction,
 } from 'firebase/firestore';
 import { db } from './config';
+import { calculateNameSuspicionScore } from '../utils/validation';
 
 const RESULTS_COL     = 'results';
 const ANALYTICS_DOC   = 'analytics/global';
 const VISITS_COL      = 'visits';
 const IDENTITIES_COL  = 'identities';  // USN → Name lock collection
 const SETTINGS_COL    = 'settings';    // Admin settings (exam session, etc.)
+const ADMINS_COL      = 'admins';      // Admin collection for RBAC
+const AUDIT_LOGS_COL  = 'audit_logs';  // Immutable security audit logs
 const DEFAULT_PAGE_SIZE = 20;
 const USN_PREFIX_END  = '\uf8ff';
 const ANALYTICS_PAGE_SIZE = 250;
@@ -1182,16 +1185,15 @@ export async function saveExamSession(session) {
 // ─── Data Integrity Scanner ────────────────────────────────────────────────────
 
 const USN_REGEX = /^4BD[0-9]{2}[A-Z]{2}[0-9]{3}$/;
-const VALID_NAME_RE = /^[A-Za-z]+(\s[A-Za-z]+)+$/;
 
 /**
  * Scans all records for data quality issues:
  *  - Invalid USN format
- *  - Invalid name (single word, numeric, too short)
+ *  - Suspicious / fake / spam name (confidence-scored 0–100%)
  *  - Duplicate USN+semester combinations
  *  - Extreme SGPA values (> 10 or < 0)
  *
- * Returns a list of flagged records with issue descriptions.
+ * Returns a list of flagged records with confidence score and issue descriptions.
  * Reads from the shared analytics cache so repeated calls are cheap.
  */
 export async function getDataIntegrityReport() {
@@ -1206,41 +1208,54 @@ export async function getDataIntegrityReport() {
 
     // 1. Invalid USN format
     if (!r.usn || !USN_REGEX.test(r.usn)) {
-      issues.push({ type: 'invalid_usn', message: `Invalid USN format: "${r.usn}"` });
+      issues.push({ type: 'invalid_usn', message: `Invalid USN format: "${r.usn}"`, score: 90 });
     }
 
-    // 2. Invalid name (fake/short/numeric)
+    // 2. Intelligent Multi-Signal Name Suspicion Analysis
     const name = (r.name || '').trim();
-    const words = name.split(/\s+/).filter(Boolean);
-    if (!name || words.length < 2 || name.length < 4 || !VALID_NAME_RE.test(name)) {
-      issues.push({ type: 'invalid_name', message: `Suspicious name: "${r.name}"` });
+    const nameAnalysis = calculateNameSuspicionScore(name);
+
+    if (nameAnalysis.category !== 'valid') {
+      issues.push({
+        type: nameAnalysis.category === 'suspicious' ? 'invalid_name' : 'review_name',
+        category: nameAnalysis.category,
+        score: nameAnalysis.score,
+        message: `Name analysis (${nameAnalysis.score}% confidence): ${nameAnalysis.reasons.join(', ')}`,
+      });
     }
 
     // 3. SGPA out of range
     if (typeof r.sgpa !== 'number' || r.sgpa < 0 || r.sgpa > 10) {
-      issues.push({ type: 'invalid_sgpa', message: `SGPA out of range: ${r.sgpa}` });
+      issues.push({ type: 'invalid_sgpa', message: `SGPA out of range: ${r.sgpa}`, score: 85 });
     }
 
     // 4. Missing branch or semester
-    if (!r.branch) issues.push({ type: 'missing_branch', message: 'Missing branch' });
-    if (!r.semester) issues.push({ type: 'missing_semester', message: 'Missing semester' });
+    if (!r.branch) issues.push({ type: 'missing_branch', message: 'Missing branch', score: 70 });
+    if (!r.semester) issues.push({ type: 'missing_semester', message: 'Missing semester', score: 70 });
 
     // 5. Track USN+Sem duplicates
     const key = `${r.usn}_${r.semester}`;
     usnSemCount[key] = (usnSemCount[key] || 0) + 1;
 
     if (issues.length > 0) {
-      flags.push({ ...r, issues });
+      const maxScore = Math.max(...issues.map(i => i.score || 50));
+      flags.push({ ...r, issues, suspicionScore: maxScore, suspicionCategory: nameAnalysis.category });
     }
   });
 
   // Second pass: flag duplicates
   records.forEach(r => {
     const key = `${r.usn}_${r.semester}`;
-    if (usnSemCount[key] > 1 && !flags.find(f => f.id === r.id)) {
-      flags.push({
-        ...r,
-        issues: [{ type: 'duplicate', message: `Duplicate USN+Semester entry (${usnSemCount[key]} records)` }],
+    if (usnSemCount[key] > 1) {
+      let existing = flags.find(f => f.id === r.id);
+      if (!existing) {
+        existing = { ...r, issues: [], suspicionScore: 75, suspicionCategory: 'needs_review' };
+        flags.push(existing);
+      }
+      existing.issues.push({
+        type: 'duplicate',
+        message: `Duplicate USN+Semester entry (${usnSemCount[key]} records)`,
+        score: 75,
       });
     }
   });
@@ -1249,7 +1264,8 @@ export async function getDataIntegrityReport() {
   const stats = {
     total: records.length,
     flagged: flags.length,
-    invalidNames: flags.filter(f => f.issues.some(i => i.type === 'invalid_name')).length,
+    suspiciousNames: flags.filter(f => f.issues.some(i => i.type === 'invalid_name')).length,
+    reviewNames: flags.filter(f => f.issues.some(i => i.type === 'review_name')).length,
     invalidUSNs: flags.filter(f => f.issues.some(i => i.type === 'invalid_usn')).length,
     duplicates: flags.filter(f => f.issues.some(i => i.type === 'duplicate')).length,
     invalidSGPA: flags.filter(f => f.issues.some(i => i.type === 'invalid_sgpa')).length,
@@ -1266,3 +1282,165 @@ export async function deleteResultById(id) {
   // Alias for the existing deleteResult function with a clearer name
   return deleteResult(id);
 }
+
+// ─── Enterprise Security & RBAC Verification ─────────────────────────────────
+
+/**
+ * Verifies that a Firebase Auth user has an active document in `admins` collection.
+ * Checks:
+ *   1. Document exists (by UID or Email)
+ *   2. active === true
+ *   3. role is one of ['super_admin', 'admin', 'read_only']
+ *
+ * Updates lastLogin timestamp on success.
+ *
+ * @param {Object} user - Firebase Auth user object
+ * @returns {Promise<{ authorized: boolean, adminRecord?: Object, reason?: string }>}
+ */
+export async function verifyAdminAccess(user) {
+  if (!db || !user) return { authorized: false, reason: 'Unauthenticated user' };
+
+  try {
+    // 1. Check admins/{uid} document directly
+    const directRef = doc(db, ADMINS_COL, user.uid);
+    let snap = await withTimeout(getDoc(directRef), 5000, null);
+    let data = snap && snap.exists() ? snap.data() : null;
+
+    // 2. Fallback check by email if doc by UID does not exist
+    if (!data && user.email) {
+      const q = query(collection(db, ADMINS_COL), where('email', '==', user.email.toLowerCase().trim()), limit(1));
+      const qSnap = await withTimeout(getDocs(q), 5000, null);
+      if (qSnap && !qSnap.empty) {
+        data = qSnap.docs[0].data();
+      }
+    }
+
+    if (!data) {
+      return { authorized: false, reason: 'No administrator profile found for this account.' };
+    }
+
+    if (data.active === false) {
+      return { authorized: false, reason: 'This administrator account has been deactivated by Super Admin.' };
+    }
+
+    const validRoles = ['super_admin', 'admin', 'read_only'];
+    const role = data.role || 'admin';
+    if (!validRoles.includes(role)) {
+      return { authorized: false, reason: 'Invalid administrator role assignment.' };
+    }
+
+    const adminRecord = {
+      uid: user.uid,
+      email: user.email,
+      name: data.name || user.displayName || 'Administrator',
+      role,
+      active: true,
+      createdAt: data.createdAt ?? null,
+      lastLogin: new Date(),
+    };
+
+    // Update last login timestamp asynchronously
+    setDoc(directRef, { lastLogin: serverTimestamp(), email: user.email.toLowerCase().trim() }, { merge: true }).catch(() => {});
+
+    return { authorized: true, adminRecord };
+  } catch (err) {
+    console.error('[verifyAdminAccess]', err);
+    return { authorized: false, reason: 'Database security check failed: ' + err.message };
+  }
+}
+
+// ─── Security Audit Logging ───────────────────────────────────────────────────
+
+/**
+ * Creates an immutable audit log entry in `audit_logs` collection.
+ */
+export async function logAuditEvent({ action, actorUid = 'system', actorEmail = 'system', actorRole = 'system', details = {} }) {
+  if (!db) return;
+  try {
+    const ref = doc(collection(db, AUDIT_LOGS_COL));
+    await setDoc(ref, {
+      action: String(action).toUpperCase(),
+      actorUid: String(actorUid),
+      actorEmail: String(actorEmail),
+      actorRole: String(actorRole),
+      details,
+      timestamp: serverTimestamp(),
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Server',
+    });
+  } catch (err) {
+    console.warn('[logAuditEvent] Audit log write failed:', err);
+  }
+}
+
+/**
+ * Fetches recent audit logs for Super Admin review.
+ */
+export async function getAuditLogs(limitCount = 50) {
+  if (!db) return [];
+  try {
+    const q = query(collection(db, AUDIT_LOGS_COL), orderBy('timestamp', 'desc'), limit(limitCount));
+    const snap = await withTimeout(getDocs(q), 6000, null);
+    if (!snap) return [];
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (err) {
+    console.error('[getAuditLogs]', err);
+    return [];
+  }
+}
+
+// ─── Admin User Management (Super Admin only) ─────────────────────────────────
+
+/**
+ * Fetches all registered admin documents from `admins` collection.
+ */
+export async function getAdminUsers() {
+  if (!db) return [];
+  try {
+    const q = query(collection(db, ADMINS_COL), orderBy('createdAt', 'desc'));
+    const snap = await withTimeout(getDocs(q), 6000, null);
+    if (!snap) return [];
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (err) {
+    console.error('[getAdminUsers]', err);
+    return [];
+  }
+}
+
+/**
+ * Super Admin function to provision an admin profile in Firestore.
+ */
+export async function createAdminRecord({ uid, email, name, role = 'admin' }) {
+  if (!db || !uid || !email) throw new Error('UID and Email are required');
+  const ref = doc(db, ADMINS_COL, uid);
+  await setDoc(ref, {
+    uid,
+    email: email.toLowerCase().trim(),
+    name: name.trim(),
+    role,
+    active: true,
+    createdAt: serverTimestamp(),
+    lastLogin: null,
+  }, { merge: true });
+}
+
+/**
+ * Updates the role of an admin account.
+ */
+export async function updateAdminRole(uid, role) {
+  if (!db || !uid) throw new Error('UID required');
+  const validRoles = ['super_admin', 'admin', 'read_only'];
+  if (!validRoles.includes(role)) throw new Error('Invalid role');
+
+  const ref = doc(db, ADMINS_COL, uid);
+  await setDoc(ref, { role, updatedAt: serverTimestamp() }, { merge: true });
+}
+
+/**
+ * Toggles an admin account's active state (Enable / Deactivate).
+ */
+export async function toggleAdminActive(uid, active) {
+  if (!db || !uid) throw new Error('UID required');
+  const ref = doc(db, ADMINS_COL, uid);
+  await setDoc(ref, { active: Boolean(active), updatedAt: serverTimestamp() }, { merge: true });
+}
+

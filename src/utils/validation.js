@@ -1,54 +1,161 @@
 /**
- * BIET Input Validation Utilities — used client-side AND mirrored in Firestore rules.
- * Pure functions, zero side-effects.
+ * Intelligent BIET Input Validation & Suspicious Name Detection Engine
+ *
+ * Uses multi-signal analysis to detect spam/keyboard mash/placeholder names while
+ * eliminating false positives for Indian names (e.g. Shankar, Malleswari, Samarth, Sinchana).
  */
 
+const KNOWN_PLACEHOLDERS = new Set([
+  'abc', 'abcd', 'asdf', 'qwerty', 'zxcv', 'dfgh', 'hjkl', 'asdfgh', 'zxcvbn',
+  'gfc', 'cvigi', 'xyz', 'aaaa', 'bbbb', 'cccc', 'dddd', 'xxxx', 'yyyy', 'zzzz',
+  '111', '123', 'test', 'hello', 'admin', 'user', 'null', 'temp', 'sample',
+  'jdhdb', 'hsh', 'hkgkg', 'asdfjkl', 'testing', 'dummy', 'fake', 'none',
+]);
+
+const VOWELS = new Set(['a', 'e', 'i', 'o', 'u', 'y']);
+
 /**
- * Validates a student's full name.
+ * Calculates a multi-signal Suspicious Confidence Score (0–100%) for a name.
  *
- * Rules:
- *  • Minimum 4 characters total
- *  • At least 2 words (first name + last name or initial)
- *  • Each word contains only alphabetic characters (A-Z, a-z)
- *  • Initials are allowed (single uppercase letters, e.g. "V", "T")
+ * Signal Weights:
+ *  • Known placeholder / keyboard mash: +80%
+ *  • Contains digits or special characters: +50%
+ *  • 3+ identical consecutive characters: +40%
+ *  • Length ≥ 3 with ZERO vowels (e.g. "hsh", "gfc", "jdhdb"): +45%
+ *  • 4+ consecutive consonants without vowel: +30%
+ *  • Length < 3: +30%
  *
- * Valid:   "LEKHAN V T", "Sania S Mishrikoti", "Manoj H P", "Rahul Bisalahalli"
- * Invalid: "Hsh", "abc", "123", "Jai", "xxxx", "J", "a b"
+ * Classifications:
+ *  0–30%   → Valid (Clean)
+ *  31–60%  → Needs Review (Moderate confidence)
+ *  61–100% → Suspicious (High confidence fake/spam)
+ *
+ * @param {string} name
+ * @returns {{ score: number, category: 'valid' | 'needs_review' | 'suspicious', reasons: string[] }}
+ */
+export function calculateNameSuspicionScore(name) {
+  if (!name || typeof name !== 'string') {
+    return { score: 100, category: 'suspicious', reasons: ['Name is empty or invalid type'] };
+  }
+
+  const raw = name.trim();
+  const lower = raw.toLowerCase();
+  const words = lower.split(/\s+/).filter(Boolean);
+  let score = 0;
+  const reasons = [];
+
+  // 1. Direct placeholder or keyboard pattern match
+  for (const word of words) {
+    if (KNOWN_PLACEHOLDERS.has(word)) {
+      score += 80;
+      reasons.push(`Contains known placeholder/keyboard pattern "${word}"`);
+    }
+  }
+
+  // 2. Contains digits or non-alpha special characters
+  if (/[0-9]/.test(raw)) {
+    score += 50;
+    reasons.push('Contains numeric digits');
+  }
+  if (/[^A-Za-z\s.]/.test(raw)) {
+    score += 40;
+    reasons.push('Contains invalid special characters');
+  }
+
+  // 3. Repeated character spam (e.g. "aaaa", "xxxx", "hhhh")
+  if (/(.)\1{2,}/.test(lower)) {
+    score += 40;
+    reasons.push('Contains 3+ repeated consecutive characters');
+  }
+
+  // 4. Word-level phonetics & vowel check
+  for (const word of words) {
+    // Ignore single letter initials like "V", "T", "N", "H", "P", "S"
+    if (word.length <= 2) continue;
+
+    const chars = word.split('');
+    const hasVowel = chars.some(c => VOWELS.has(c));
+
+    // Word >= 3 letters with zero vowels (e.g. "hsh", "gfc", "jdhdb", "hkgkg")
+    if (!hasVowel) {
+      score += 45;
+      reasons.push(`Word "${word}" contains no vowels`);
+    }
+
+    // Check for 4+ consecutive consonants
+    let maxConsonants = 0;
+    let currentConsonants = 0;
+    for (const c of chars) {
+      if (/^[a-z]$/.test(c) && !VOWELS.has(c)) {
+        currentConsonants++;
+        if (currentConsonants > maxConsonants) maxConsonants = currentConsonants;
+      } else {
+        currentConsonants = 0;
+      }
+    }
+    if (maxConsonants >= 4) {
+      score += 30;
+      reasons.push(`Word "${word}" has impossible consonant cluster (${maxConsonants} in a row)`);
+    }
+  }
+
+  // 5. Total name length check
+  if (raw.length < 3) {
+    score += 35;
+    reasons.push('Name is too short (< 3 characters)');
+  }
+
+  // Clamp score between 0 and 100
+  const finalScore = Math.min(100, Math.max(0, score));
+
+  let category = 'valid';
+  if (finalScore >= 61) {
+    category = 'suspicious';
+  } else if (finalScore >= 31) {
+    category = 'needs_review';
+  }
+
+  return { score: finalScore, category, reasons };
+}
+
+/**
+ * Validates a student's full name at input time.
+ * Accepts single-word Indian names (e.g. Shankar, Malleswari, Samarth, Sinchana)
+ * while blocking high-confidence fake/spam entries (e.g. asdf, test, 123, hsh).
  *
  * @param {string} name
  * @returns {{ valid: boolean, error: string | null }}
  */
 export function validateFullName(name) {
   if (!name || typeof name !== 'string') {
-    return { valid: false, error: 'Name is required.' };
+    return { valid: false, error: 'Please enter your full name.' };
   }
 
   const trimmed = name.trim();
 
-  if (trimmed.length < 4) {
+  if (trimmed.length < 2) {
     return {
       valid: false,
-      error: 'Please enter your full name as per college records (e.g. Rahul H K).',
+      error: 'Please enter a valid name (at least 2 letters).',
     };
   }
 
-  const words = trimmed.split(/\s+/).filter(Boolean);
+  // Calculate intelligent suspicion score
+  const { score, category, reasons } = calculateNameSuspicionScore(trimmed);
 
-  if (words.length < 2) {
+  if (category === 'suspicious' || score >= 60) {
     return {
       valid: false,
-      error: 'Please enter your full name with at least first and last name (e.g. Rahul Kumar).',
+      error: 'Please enter your full name as per college records (e.g. Rahul H K or Sinchana).',
     };
   }
 
-  const ONLY_ALPHA = /^[A-Za-z]+$/;
-  for (const word of words) {
-    if (!ONLY_ALPHA.test(word)) {
-      return {
-        valid: false,
-        error: 'Name must contain only letters. No numbers or special characters allowed.',
-      };
-    }
+  const ONLY_ALPHA = /^[A-Za-z\s.]+$/;
+  if (!ONLY_ALPHA.test(trimmed)) {
+    return {
+      valid: false,
+      error: 'Name must contain only letters. No numbers or special characters allowed.',
+    };
   }
 
   return { valid: true, error: null };

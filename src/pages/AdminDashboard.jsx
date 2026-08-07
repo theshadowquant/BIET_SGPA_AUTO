@@ -22,6 +22,8 @@ import { exportAllToCSV } from '../utils/exportCSV';
 import {
   getExamSession, saveExamSession, getDataIntegrityReport,
   deleteResultById, exportAllResults,
+  getAdminUsers, updateAdminRole, toggleAdminActive, createAdminRecord,
+  getAuditLogs, logAuditEvent,
 } from '../firebase/services';
 import { TableSkeleton, ChartSkeleton } from '../components/SkeletonLoader';
 import SGPADistChart from '../components/charts/SGPADistChart';
@@ -103,10 +105,22 @@ const S = {
 
 const DEBOUNCE_MS = 500;
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ adminProfile }) {
   const navigate = useNavigate();
 
-  // Active Tab: 'records', 'curriculum', 'analytics'
+  // Role permissions
+  const role = adminProfile?.role || 'admin';
+  const adminName = adminProfile?.name || 'Administrator';
+  const adminEmail = adminProfile?.email || '';
+  const adminUid = adminProfile?.uid || '';
+
+  const isSuperAdmin = role === 'super_admin';
+  const isReadOnly   = role === 'read_only';
+  const canDelete    = isSuperAdmin;
+  const canExport    = !isReadOnly;
+  const canEdit      = !isReadOnly;
+
+  // Active Tab: 'records', 'curriculum', 'analytics', 'settings', 'cleanup', 'users'
   const [activeTab, setActiveTab] = useState('records');
 
   const [analytics, setAnalytics]       = useState(null);
@@ -174,6 +188,12 @@ export default function AdminDashboard() {
   // Exporting state (for full-database export progress)
   const [exporting, setExporting]           = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+
+  // Admin User Management & Audit Logs (Super Admin only)
+  const [adminUsersList, setAdminUsersList] = useState([]);
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [auditLogsList, setAuditLogsList]   = useState([]);
+  const [auditLogsLoading, setAuditLogsLoading] = useState(false);
 
   // Trigger self-seeding on launch (only if DB is empty)
   useEffect(() => {
@@ -298,10 +318,17 @@ export default function AdminDashboard() {
   };
 
   const confirmDelete = async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || !canDelete) return;
     setDeleting(true);
     try {
       await deleteResult(deleteTarget.id);
+      await logAuditEvent({
+        action: 'DELETE_STUDENT_RECORD',
+        actorUid: adminUid,
+        actorEmail: adminEmail,
+        actorRole: role,
+        details: { targetUsn: deleteTarget.usn, targetName: deleteTarget.name, targetId: deleteTarget.id },
+      });
       setResults(p => p.filter(r => r.id !== deleteTarget.id));
       toast.success(`Deleted ${deleteTarget.usn}`);
       setDeleteTarget(null);
@@ -310,6 +337,10 @@ export default function AdminDashboard() {
   };
 
   const handleExport = async () => {
+    if (isReadOnly) {
+      toast.error('Read-Only administrators cannot export data');
+      return;
+    }
     if (exporting) return;
     setExporting(true);
     setExportProgress(0);
@@ -320,6 +351,13 @@ export default function AdminDashboard() {
         `biet_results_${Date.now()}.csv`,
         setExportProgress,
       );
+      await logAuditEvent({
+        action: 'EXPORT_STUDENT_DATA',
+        actorUid: adminUid,
+        actorEmail: adminEmail,
+        actorRole: role,
+        details: { recordCount: count, filters: activeFilters },
+      });
       toast.success(`Exported ${count} records to CSV`, { id: toastId });
     } catch (err) {
       toast.error('Export failed: ' + (err.message ?? 'Unknown error'), { id: toastId });
@@ -340,6 +378,10 @@ export default function AdminDashboard() {
   }, [activeTab, examLoaded]);
 
   const handleSaveExamSession = async () => {
+    if (!canEdit) {
+      toast.error('Read-only accounts cannot modify settings');
+      return;
+    }
     if (!examSession.examTitle || !examSession.examMonth || !examSession.examYear) {
       toast.error('All fields are required');
       return;
@@ -347,6 +389,13 @@ export default function AdminDashboard() {
     setExamSaving(true);
     try {
       await saveExamSession(examSession);
+      await logAuditEvent({
+        action: 'UPDATE_EXAM_SESSION',
+        actorUid: adminUid,
+        actorEmail: adminEmail,
+        actorRole: role,
+        details: examSession,
+      });
       toast.success('Exam session saved! All report cards will update automatically.');
     } catch (err) {
       toast.error('Save failed: ' + (err.message ?? err.code));
@@ -372,9 +421,20 @@ export default function AdminDashboard() {
   };
 
   const handleCleanupDelete = async (id, usn) => {
+    if (!canDelete) {
+      toast.error('Only Super Admins can delete records');
+      return;
+    }
     setCleanupDeleting(id);
     try {
       await deleteResultById(id);
+      await logAuditEvent({
+        action: 'DATA_CLEANUP_DELETE',
+        actorUid: adminUid,
+        actorEmail: adminEmail,
+        actorRole: role,
+        details: { targetId: id, targetUsn: usn },
+      });
       setCleanupReport(prev => ({
         ...prev,
         flags: prev.flags.filter(f => f.id !== id),
@@ -386,6 +446,73 @@ export default function AdminDashboard() {
       toast.error('Delete failed');
     } finally {
       setCleanupDeleting(null);
+    }
+  };
+
+  const handleIgnoreFlag = (id) => {
+    setCleanupReport(prev => ({
+      ...prev,
+      flags: prev.flags.filter(f => f.id !== id),
+      stats: { ...prev.stats, flagged: Math.max(0, prev.stats.flagged - 1) },
+    }));
+    toast.success('Marked as valid');
+  };
+
+  // ─── Super Admin User & Audit Log Management ──────────────────────────────
+  const loadAdminUsersAndAudit = useCallback(async () => {
+    if (!isSuperAdmin) return;
+    setAdminUsersLoading(true);
+    setAuditLogsLoading(true);
+    try {
+      const [users, logs] = await Promise.all([getAdminUsers(), getAuditLogs(50)]);
+      setAdminUsersList(users);
+      setAuditLogsList(logs);
+    } catch (err) {
+      toast.error('Failed to load admin management data');
+    } finally {
+      setAdminUsersLoading(false);
+      setAuditLogsLoading(false);
+    }
+  }, [isSuperAdmin]);
+
+  useEffect(() => {
+    if (activeTab === 'users') {
+      loadAdminUsersAndAudit();
+    }
+  }, [activeTab, loadAdminUsersAndAudit]);
+
+  const handleAdminRoleChange = async (targetUid, newRole) => {
+    try {
+      await updateAdminRole(targetUid, newRole);
+      await logAuditEvent({
+        action: 'UPDATE_ADMIN_ROLE',
+        actorUid: adminUid,
+        actorEmail: adminEmail,
+        actorRole: role,
+        details: { targetUid, newRole },
+      });
+      setAdminUsersList(prev => prev.map(u => u.uid === targetUid ? { ...u, role: newRole } : u));
+      toast.success('Admin role updated');
+    } catch (err) {
+      toast.error('Role update failed');
+    }
+  };
+
+  const handleToggleAdminActive = async (targetUid, currentActive) => {
+    const nextActive = !currentActive;
+    try {
+      await toggleAdminActive(targetUid, nextActive);
+      await logAuditEvent({
+        action: nextActive ? 'ENABLE_ADMIN' : 'DEACTIVATE_ADMIN',
+        actorUid: adminUid,
+        actorEmail: adminEmail,
+        actorRole: role,
+        details: { targetUid, nextActive },
+      });
+      setAdminUsersList(prev => prev.map(u => u.uid === targetUid ? { ...u, active: nextActive } : u));
+      toast.success(`Admin ${nextActive ? 'activated' : 'deactivated'}`);
+    } catch (err) {
+      toast.error('Status toggle failed');
     }
   };
 
@@ -404,6 +531,12 @@ export default function AdminDashboard() {
   }, []);
 
   const handleSignOut = async () => {
+    await logAuditEvent({
+      action: 'ADMIN_LOGOUT',
+      actorUid: adminUid,
+      actorEmail: adminEmail,
+      actorRole: role,
+    }).catch(() => {});
     await signOut(auth);
     navigate('/admin');
     toast.success('Signed out');
@@ -580,6 +713,7 @@ export default function AdminDashboard() {
           { id: 'analytics',  icon: <BarChart2 size={15} />,  label: 'SaaS Leaderboards' },
           { id: 'settings',   icon: <Settings size={15} />,   label: 'Exam Session' },
           { id: 'cleanup',    icon: <ShieldCheck size={15} />, label: 'Data Cleanup' },
+          ...(isSuperAdmin ? [{ id: 'users', icon: <Users size={15} />, label: 'Manage Admins' }] : []),
         ].map(tab => (
           <button
             key={tab.id}
@@ -1418,43 +1552,73 @@ export default function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {cleanupReport.flags.map(item => (
-                      <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '12px 16px', fontWeight: 700, color: '#0f172a' }}>{item.name || '—'}</td>
-                        <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#475569' }}>{item.usn || '—'}</td>
-                        <td style={{ padding: '12px 16px', color: '#64748b' }}>Sem {item.semester || '—'}</td>
-                        <td style={{ padding: '12px 16px', fontWeight: 700, color: '#2563eb' }}>{item.sgpa !== undefined ? Number(item.sgpa).toFixed(2) : '—'}</td>
-                        <td style={{ padding: '12px 16px' }}>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                            {item.issues.map((iss, idx) => (
-                              <span key={idx} style={{
-                                padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-                                background: iss.type === 'invalid_name' ? '#fef2f2' : iss.type === 'duplicate' ? '#eff6ff' : '#fffbeb',
-                                color: iss.type === 'invalid_name' ? '#dc2626' : iss.type === 'duplicate' ? '#1d4ed8' : '#b45309',
-                                border: `1px solid ${iss.type === 'invalid_name' ? '#fecaca' : iss.type === 'duplicate' ? '#bfdbfe' : '#fde68a'}`,
+                    {cleanupReport.flags.map(item => {
+                      const isHighSuspicion = (item.suspicionScore || 0) >= 61;
+                      const isReview = (item.suspicionScore || 0) >= 31 && (item.suspicionScore || 0) < 61;
+
+                      return (
+                        <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '12px 16px', fontWeight: 700, color: '#0f172a' }}>
+                            {item.name || '—'}
+                            {(item.suspicionScore || 0) > 0 && (
+                              <span style={{
+                                display: 'inline-block', marginLeft: 8, padding: '2px 8px', borderRadius: 999,
+                                fontSize: 10, fontWeight: 800,
+                                background: isHighSuspicion ? '#fef2f2' : isReview ? '#fefce8' : '#f0fdf4',
+                                color: isHighSuspicion ? '#dc2626' : isReview ? '#a16207' : '#166534',
+                                border: `1px solid ${isHighSuspicion ? '#fecaca' : isReview ? '#fef08a' : '#bbf7d0'}`,
                               }}>
-                                {iss.message}
+                                {isHighSuspicion ? `High Suspicion (${item.suspicionScore}%)` : isReview ? `Needs Review (${item.suspicionScore}%)` : 'Valid'}
                               </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                          <button
-                            id={`cleanup-delete-${item.id}`}
-                            style={{
-                              padding: '5px 12px', borderRadius: 8, border: '1px solid #fecaca',
-                              background: '#fef2f2', color: '#dc2626', fontSize: 12, fontWeight: 700,
-                              cursor: cleanupDeleting === item.id ? 'not-allowed' : 'pointer',
-                            }}
-                            onClick={() => handleCleanupDelete(item.id, item.usn)}
-                            disabled={cleanupDeleting === item.id}
-                          >
-                            <Trash size={13} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />
-                            {cleanupDeleting === item.id ? 'Deleting…' : 'Delete Record'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                            )}
+                          </td>
+                          <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#475569' }}>{item.usn || '—'}</td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>Sem {item.semester || '—'}</td>
+                          <td style={{ padding: '12px 16px', fontWeight: 700, color: '#2563eb' }}>{item.sgpa !== undefined ? Number(item.sgpa).toFixed(2) : '—'}</td>
+                          <td style={{ padding: '12px 16px' }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                              {item.issues.map((iss, idx) => (
+                                <span key={idx} style={{
+                                  padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                                  background: iss.type === 'invalid_name' ? '#fef2f2' : iss.type === 'duplicate' ? '#eff6ff' : '#fffbeb',
+                                  color: iss.type === 'invalid_name' ? '#dc2626' : iss.type === 'duplicate' ? '#1d4ed8' : '#b45309',
+                                  border: `1px solid ${iss.type === 'invalid_name' ? '#fecaca' : iss.type === 'duplicate' ? '#bfdbfe' : '#fde68a'}`,
+                                }}>
+                                  {iss.message}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                              <button
+                                id={`cleanup-ignore-${item.id}`}
+                                style={{
+                                  padding: '5px 10px', borderRadius: 8, border: '1px solid #cbd5e1',
+                                  background: '#fff', color: '#475569', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                                }}
+                                onClick={() => handleIgnoreFlag(item.id)}
+                              >
+                                Mark Valid
+                              </button>
+                              <button
+                                id={`cleanup-delete-${item.id}`}
+                                style={{
+                                  padding: '5px 10px', borderRadius: 8, border: '1px solid #fecaca',
+                                  background: '#fef2f2', color: '#dc2626', fontSize: 11, fontWeight: 700,
+                                  cursor: cleanupDeleting === item.id ? 'not-allowed' : 'pointer',
+                                }}
+                                onClick={() => handleCleanupDelete(item.id, item.usn)}
+                                disabled={cleanupDeleting === item.id || !canDelete}
+                              >
+                                <Trash size={12} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />
+                                {cleanupDeleting === item.id ? 'Deleting…' : 'Delete'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
