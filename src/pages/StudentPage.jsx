@@ -108,6 +108,7 @@ export default function StudentPage() {
   const [saved, setSaved]         = useState(false);
   const [history, setHistory]     = useState([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [calcMode, setCalcMode]   = useState('sgpa'); // 'sgpa' | 'cgpa'
   const [cgpa, setCgpa]               = useState(null);
   const [loadingCGPA, setLoadingCGPA] = useState(false);
   const resultRef = useRef(null);
@@ -382,10 +383,48 @@ export default function StudentPage() {
         </p>
       </motion.div>
 
-      {/* ── CGPA Lookup Panel (always visible) ── */}
-      <motion.div className="no-print" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, delay: 0.1 }}>
-        <CGPALookupPanel />
-      </motion.div>
+      {/* ── Mode Switcher Tabs ── */}
+      <div className="no-print" style={{
+        display: 'flex', justifyContent: 'center', gap: 10,
+        marginBottom: 24, padding: 4, background: '#f1f5f9', borderRadius: 14,
+        maxWidth: 460, margin: '0 auto 24px', border: '1px solid #e2e8f0'
+      }}>
+        <button
+          id="mode-sgpa-btn"
+          onClick={() => setCalcMode('sgpa')}
+          style={{
+            flex: 1, padding: '10px 16px', borderRadius: 10, border: 'none',
+            fontSize: 14, fontWeight: 700, cursor: 'pointer',
+            background: calcMode === 'sgpa' ? '#ffffff' : 'transparent',
+            color: calcMode === 'sgpa' ? '#2563eb' : '#64748b',
+            boxShadow: calcMode === 'sgpa' ? '0 2px 8px rgba(0,0,0,0.06)' : 'none',
+            transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}
+        >
+          <Calculator size={16} /> SGPA Calculator
+        </button>
+        <button
+          id="mode-cgpa-btn"
+          onClick={() => setCalcMode('cgpa')}
+          style={{
+            flex: 1, padding: '10px 16px', borderRadius: 10, border: 'none',
+            fontSize: 14, fontWeight: 700, cursor: 'pointer',
+            background: calcMode === 'cgpa' ? '#ffffff' : 'transparent',
+            color: calcMode === 'cgpa' ? '#2563eb' : '#64748b',
+            boxShadow: calcMode === 'cgpa' ? '0 2px 8px rgba(0,0,0,0.06)' : 'none',
+            transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}
+        >
+          <Award size={16} /> Auto CGPA Calculator
+        </button>
+      </div>
+
+      {/* ── CGPA Calculator Panel (Prominent when in CGPA mode or collapsed in SGPA mode) ── */}
+      {(calcMode === 'cgpa' || true) && (
+        <motion.div className="no-print" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, delay: 0.1 }} style={{ marginBottom: 24 }}>
+          <CGPALookupPanel forceExpand={calcMode === 'cgpa'} />
+        </motion.div>
+      )}
 
       <AnimatePresence mode="wait">
 
@@ -725,12 +764,16 @@ export default function StudentPage() {
 }
 
 // ─── CGPA Lookup Panel ────────────────────────────────────────────────────────
-function CGPALookupPanel() {
+function CGPALookupPanel({ forceExpand = false }) {
   const [lookupUsn, setLookupUsn]     = useState('');
   const [lookupResult, setLookupResult] = useState(null);
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError]   = useState('');
-  const [expanded, setExpanded]         = useState(false);
+  const [expanded, setExpanded]         = useState(true);
+
+  useEffect(() => {
+    if (forceExpand) setExpanded(true);
+  }, [forceExpand]);
 
   const handleLookup = async () => {
     const trimmed = lookupUsn.trim().toUpperCase();
