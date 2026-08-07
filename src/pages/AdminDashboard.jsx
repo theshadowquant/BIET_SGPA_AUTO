@@ -13,7 +13,8 @@ import { auth } from '../firebase/config';
 import {
   getPaginatedResults, deleteResult, subscribeToAnalytics,
   getSGPADistribution, getDailyUsage, checkAndSeedCurriculum,
-  fetchCurriculum, saveCurriculum, getLeaderboardStats
+  fetchCurriculum, saveCurriculum, getLeaderboardStats,
+  getLeaderboardStatsBySemester,
 } from '../firebase/services';
 
 import { exportToCSV } from '../utils/exportCSV';
@@ -145,6 +146,11 @@ export default function AdminDashboard() {
   // SaaS Leaderboard & Advanced Analytics
   const [leaderboardData, setLeaderboardData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
+
+  // Semester filter for branch leaderboard: null = overall, 1-8 = specific semester
+  const [leaderboardSemFilter, setLeaderboardSemFilter] = useState(null);
+  const [semLeaderboard, setSemLeaderboard]             = useState(null);
+  const [semLeaderboardLoading, setSemLeaderboardLoading] = useState(false);
 
   // Trigger self-seeding on launch (only if DB is empty)
   useEffect(() => {
@@ -413,6 +419,8 @@ export default function AdminDashboard() {
     try {
       const stats = await getLeaderboardStats();
       setLeaderboardData(stats);
+      // Pre-load the overall semester leaderboard (same cache hit)
+      setSemLeaderboard(stats.branchLeaderboard);
     } catch (e) {
       toast.error('Failed to load performance leaderboards');
     } finally {
@@ -425,6 +433,20 @@ export default function AdminDashboard() {
       loadLeaderboards();
     }
   }, [activeTab, loadLeaderboards]);
+
+  // When semester filter changes, recompute leaderboard from the cache (no Firestore read)
+  const handleSemFilterChange = useCallback(async (sem) => {
+    setLeaderboardSemFilter(sem);
+    setSemLeaderboardLoading(true);
+    try {
+      const filtered = await getLeaderboardStatsBySemester(sem); // null = overall
+      setSemLeaderboard(filtered);
+    } catch {
+      toast.error('Failed to filter leaderboard');
+    } finally {
+      setSemLeaderboardLoading(false);
+    }
+  }, []);
 
   const hasFilters = Object.keys(activeFilters).length > 0;
 
@@ -956,38 +978,93 @@ export default function AdminDashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 24 }}>
           {/* Branch Leaderboard */}
           <div className="card" style={{ padding: 24 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #f1f5f9', paddingBottom: 12, marginBottom: 16 }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #f1f5f9', paddingBottom: 12, marginBottom: 14 }}>
               <Award size={18} className="text-blue-600" />
               <p style={{ ...S.sectionTitle, fontSize: 16 }}>Branch Performance Leaderboard</p>
             </div>
-            {analyticsLoading ? (
+
+            {/* Semester Filter Tabs */}
+            <div style={{ marginBottom: 16 }}>
+              <p style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: '.07em', textTransform: 'uppercase', marginBottom: 8 }}>Filter by Semester</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {[null, 1, 2, 3, 4, 5, 6, 7, 8].map(sem => {
+                  const active = leaderboardSemFilter === sem;
+                  return (
+                    <button
+                      key={sem ?? 'overall'}
+                      id={`leaderboard-sem-${sem ?? 'overall'}`}
+                      onClick={() => handleSemFilterChange(sem)}
+                      disabled={analyticsLoading}
+                      style={{
+                        padding: '5px 11px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                        border: active ? '1.5px solid #2563eb' : '1.5px solid #e2e8f0',
+                        background: active ? '#eff6ff' : '#f8fafc',
+                        color: active ? '#1d4ed8' : '#64748b',
+                        cursor: analyticsLoading ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {sem === null ? 'Overall' : `Sem ${sem}`}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Leaderboard list */}
+            {analyticsLoading || semLeaderboardLoading ? (
               <TableSkeleton rows={4} />
-            ) : !leaderboardData?.branchLeaderboard?.length ? (
-              <p style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>No submissions yet to compute standings.</p>
+            ) : !semLeaderboard?.length ? (
+              <p style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>
+                {leaderboardSemFilter !== null
+                  ? `No submissions found for Semester ${leaderboardSemFilter}.`
+                  : 'No submissions yet to compute standings.'}
+              </p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {leaderboardData.branchLeaderboard.map((b, idx) => {
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {semLeaderboard.map((b, idx) => {
                   const details = BRANCHES.find(br => br.id === b.id);
                   const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '';
                   return (
-                    <div key={b.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <motion.div
+                      key={b.id}
+                      initial={{ opacity: 0, x: -6 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.04 }}
+                      style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                    >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: 14, fontWeight: 700, color: '#334155', minWidth: 20 }}>{idx + 1}.</span>
-                          <span style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{details?.name || b.id}</span>
-                          <span style={{ fontSize: 14 }}>{medal}</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#334155', minWidth: 22 }}>{idx + 1}.</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{details?.name || b.id}</span>
+                          {medal && <span style={{ fontSize: 14 }}>{medal}</span>}
                         </div>
-                        <span style={{ fontSize: 15, fontWeight: 800, color: '#2563eb' }}>{b.avg.toFixed(2)} GP</span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ flex: 1, height: 8, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', background: 'linear-gradient(90deg, #3b82f6, #6366f1)', borderRadius: 999, width: `${(b.avg / 10) * 100}%` }} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>{b.submissions} sub{b.submissions !== 1 ? 's' : ''}</span>
+                          <span style={{ fontSize: 15, fontWeight: 800, color: '#2563eb', minWidth: 52, textAlign: 'right' }}>{b.avg.toFixed(2)}</span>
                         </div>
-                        <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>{b.submissions} logs</span>
                       </div>
-                    </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ flex: 1, height: 7, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden' }}>
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(b.avg / 10) * 100}%` }}
+                            transition={{ duration: 0.5, delay: idx * 0.04 }}
+                            style={{ height: '100%', background: 'linear-gradient(90deg, #3b82f6, #6366f1)', borderRadius: 999 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
                   );
                 })}
+
+                {/* Semester context label */}
+                <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 4, textAlign: 'center', fontWeight: 600 }}>
+                  {leaderboardSemFilter === null
+                    ? `Overall — all semesters combined`
+                    : `Semester ${leaderboardSemFilter} rankings only`}
+                </p>
               </div>
             )}
           </div>

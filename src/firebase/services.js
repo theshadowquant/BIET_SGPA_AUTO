@@ -83,6 +83,64 @@ export async function getResultsByUSN(usn, maxResults = 5) {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
+// ─── Student CGPA (latest saved result for each completed semester) ───────────
+export async function getStudentCGPA(usn, selectedSemester = null) {
+  if (!db) return { cgpa: null, latestSemester: 0, completedSemesters: [], missingSemesters: [], semesterBreakdown: [] };
+
+  // A student has at most eight semesters. The cap allows retries while keeping
+  // this a small, USN-indexed read instead of a collection scan.
+  const q = query(
+    collection(db, RESULTS_COL),
+    where('usn', '==', usn.toUpperCase().trim()),
+    orderBy('timestamp', 'desc'),
+    limit(50)
+  );
+  const snap = await withTimeout(getDocs(q), 8000, null);
+  if (!snap) throw new Error('Unable to load semester results');
+
+  const latestBySemester = new Map();
+  snap.docs.forEach(resultDoc => {
+    const record = resultDoc.data();
+    const sem = Number(record.semester);
+    if (sem >= 1 && sem <= 8 && !latestBySemester.has(sem)) latestBySemester.set(sem, record);
+  });
+
+  const highestSavedSemester = Math.max(0, ...latestBySemester.keys());
+  const latestSemester = Math.max(Number(selectedSemester) || 0, highestSavedSemester);
+  const completedSemesters = [...latestBySemester.keys()].sort((a, b) => a - b);
+  const missingSemesters = Array.from({ length: latestSemester }, (_, index) => index + 1)
+    .filter(sem => !latestBySemester.has(sem));
+
+  // Build a per-semester breakdown array for the CGPA lookup panel
+  const semesterBreakdown = completedSemesters.map(sem => {
+    const record = latestBySemester.get(sem);
+    return {
+      semester: sem,
+      sgpa: parseFloat(Number(record.sgpa || 0).toFixed(2)),
+      year: Math.ceil(sem / 2),
+      semInYear: sem % 2 === 0 ? 2 : 1,
+      name: record.name || '',
+      branch: record.branch || '',
+    };
+  });
+
+  if (!latestSemester || missingSemesters.length) {
+    return { cgpa: null, latestSemester, completedSemesters, missingSemesters, semesterBreakdown };
+  }
+
+  const total = Array.from(latestBySemester.values())
+    .filter(record => Number(record.semester) <= latestSemester)
+    .reduce((sum, record) => sum + Number(record.sgpa || 0), 0);
+
+  return {
+    cgpa: parseFloat((total / latestSemester).toFixed(2)),
+    latestSemester,
+    completedSemesters,
+    missingSemesters: [],
+    semesterBreakdown,
+  };
+}
+
 // ─── Paginated Results (server-side filters + snapshot cursors) ──────────────
 function toNameSearchPrefix(value) {
   return value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
@@ -878,4 +936,32 @@ export async function getLeaderboardStats() {
     failedSubjects,
     topPerformingSubjects,
   };
+}
+
+// ─── Semester-wise Branch Leaderboard (client-side filter of cached data) ─────
+// Zero extra Firestore reads — reuses the same shared cache as getLeaderboardStats
+export async function getLeaderboardStatsBySemester(semester = null) {
+  if (!db) return [];
+  const records = await getAllResultsForAnalytics();
+
+  // Filter by semester if specified; null = overall (all semesters)
+  const filtered = semester !== null
+    ? records.filter(r => Number(r.semester) === semester)
+    : records;
+
+  const branchMap = {};
+  filtered.forEach(r => {
+    const b = r.branch || 'cs-ds';
+    if (!branchMap[b]) branchMap[b] = { count: 0, sum: 0 };
+    branchMap[b].count++;
+    branchMap[b].sum += r.sgpa || 0;
+  });
+
+  return Object.entries(branchMap)
+    .map(([id, info]) => ({
+      id,
+      avg: parseFloat((info.sum / info.count).toFixed(2)),
+      submissions: info.count,
+    }))
+    .sort((a, b) => b.avg - a.avg);
 }

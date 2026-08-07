@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import {
   Calculator, Download, Printer, Share2, History,
   ChevronRight, RotateCcw, Clock, CheckCircle2,
+  Search, TrendingUp, Award, BookOpen, ChevronDown, ChevronUp,
 } from 'lucide-react';
 
 import SubjectForm from '../components/SubjectForm';
@@ -13,7 +14,7 @@ import SubjectTable from '../components/SubjectTable';
 import { calculateSGPA, validateMarks } from '../utils/calculateSGPA';
 import { checkRateLimit, recordSubmission, formatCooldown } from '../utils/rateLimit';
 import { getOrCreateSession, getDeviceInfo, markSessionAsRecorded } from '../utils/sessionManager';
-import { saveResult, getResultsByUSN, recordVisit, fetchCurriculum } from '../firebase/services';
+import { saveResult, getResultsByUSN, getStudentCGPA, recordVisit, fetchCurriculum } from '../firebase/services';
 
 const BRANCHES = [
   // Computer Science & IT
@@ -65,6 +66,27 @@ const S = {
   actionRight: { display: 'flex', alignItems: 'center', gap: 8 },
 };
 
+/** Ordinal suffix: 1st, 2nd, 3rd, 4th… */
+function ordinal(n) {
+  return n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
+}
+
+/** Derive a human-readable "Year X, Semester Y" label from the raw semester number */
+function yearSemLabel(semNumber) {
+  const year = Math.ceil(semNumber / 2);
+  const semInYear = semNumber % 2 === 0 ? 2 : 1;
+  return `Year ${year}, ${ordinal(semInYear)} Semester`;
+}
+
+/** Grade-point → color mapping */
+function sgpaColor(sgpa) {
+  if (sgpa >= 9)  return { bg: '#f0fdf4', color: '#166534', border: '#bbf7d0' };
+  if (sgpa >= 8)  return { bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' };
+  if (sgpa >= 7)  return { bg: '#fef9c3', color: '#713f12', border: '#fde68a' };
+  if (sgpa >= 6)  return { bg: '#fff7ed', color: '#9a3412', border: '#fed7aa' };
+  return           { bg: '#fef2f2', color: '#991b1b', border: '#fecaca' };
+}
+
 export default function StudentPage() {
   const [step, setStep]           = useState('form');
   const [studentName, setName]    = useState('');
@@ -81,6 +103,8 @@ export default function StudentPage() {
   const [saved, setSaved]         = useState(false);
   const [history, setHistory]     = useState([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [cgpa, setCgpa]               = useState(null);
+  const [loadingCGPA, setLoadingCGPA] = useState(false);
   const resultRef = useRef(null);
 
   // Fetch subjects dynamically from Firestore when branch/semester changes
@@ -146,6 +170,17 @@ export default function StudentPage() {
     } catch { /* silent */ }
   };
 
+  const loadCGPA = async (usnValue, currentSemester) => {
+    setLoadingCGPA(true);
+    try {
+      setCgpa(await getStudentCGPA(usnValue, currentSemester));
+    } catch {
+      setCgpa(null);
+    } finally {
+      setLoadingCGPA(false);
+    }
+  };
+
   const validate = () => {
     const errs = {};
     if (!studentName.trim()) errs.name = 'Name is required';
@@ -202,6 +237,7 @@ export default function StudentPage() {
       recordSubmission(usn);
       setSaved(true);
       toast.success('Result saved!');
+      loadCGPA(usn, semester);
     } catch (err) {
       console.error('[Save]', err);
       toast.error('Calculated OK, but save failed: ' + (err.code ?? err.message));
@@ -230,6 +266,7 @@ export default function StudentPage() {
 
   const handleReset = () => {
     setStep('form'); setResult(null);
+    setCgpa(null); setLoadingCGPA(false);
     const initial = {};
     subjects.forEach(s => {
       initial[s.key] = '';
@@ -250,14 +287,19 @@ export default function StudentPage() {
           <Calculator size={13} /> VTU Grading System · 2024–25
         </div>
         <h1 style={S.h1}>
-          SGPA{' '}
+          SGPA & CGPA{' '}
           <span style={{ background: 'linear-gradient(135deg,#3b82f6,#14b8a6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
             Calculator
           </span>
         </h1>
         <p style={S.sub}>
-          Enter your subject marks to instantly calculate your Semester Grade Point Average based on VTU norms.
+          Calculate your Semester GPA instantly, or look up your Cumulative GPA across all completed semesters.
         </p>
+      </motion.div>
+
+      {/* ── CGPA Lookup Panel (always visible) ── */}
+      <motion.div className="no-print" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, delay: 0.1 }}>
+        <CGPALookupPanel />
       </motion.div>
 
       <AnimatePresence mode="wait">
@@ -265,7 +307,16 @@ export default function StudentPage() {
         {/* ── FORM STEP ── */}
         {step === 'form' && (
           <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={S.stack}>
+            style={{ ...S.stack, marginTop: 20 }}>
+
+            {/* Divider */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', letterSpacing: '.08em', textTransform: 'uppercase' }}>
+                SGPA Calculator
+              </span>
+              <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+            </div>
 
             {/* Student Info */}
             <div className="card" style={{ padding: 28 }}>
@@ -335,7 +386,7 @@ export default function StudentPage() {
                   >
                     <option value="">Select Semester</option>
                     {SEMESTERS.map(s => (
-                      <option key={s} value={s}>{s}{s === 1 ? 'st' : s === 2 ? 'nd' : s === 3 ? 'rd' : 'th'} Semester</option>
+                      <option key={s} value={s}>{ordinal(s)} Semester</option>
                     ))}
                   </select>
                   {errors.semester && <p style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>{errors.semester}</p>}
@@ -445,6 +496,7 @@ export default function StudentPage() {
               {/* ── Screen-Only Layout (Modern Cards & Badges) ── */}
               <div className="no-print">
                 <ResultCard result={result} studentName={studentName} usn={usn} />
+                <CGPACard cgpa={cgpa} loading={loadingCGPA} currentSemester={Number(semester)} />
                 <div style={{ marginTop: 20 }}>
                   <SubjectTable breakdown={result.breakdown} />
                 </div>
@@ -577,5 +629,345 @@ export default function StudentPage() {
         )}
       </AnimatePresence>
     </main>
+  );
+}
+
+// ─── CGPA Lookup Panel ────────────────────────────────────────────────────────
+function CGPALookupPanel() {
+  const [lookupUsn, setLookupUsn]     = useState('');
+  const [lookupResult, setLookupResult] = useState(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupError, setLookupError]   = useState('');
+  const [expanded, setExpanded]         = useState(false);
+
+  const handleLookup = async () => {
+    const trimmed = lookupUsn.trim().toUpperCase();
+    if (!trimmed) { setLookupError('Please enter your USN'); return; }
+    if (!/^4BD\d{2}[A-Z]{2}\d{3}$/.test(trimmed)) {
+      setLookupError('Enter a valid USN — e.g. 4BD24CD001');
+      return;
+    }
+    setLookupError('');
+    setLookupLoading(true);
+    setLookupResult(null);
+    try {
+      const data = await getStudentCGPA(trimmed);
+      setLookupResult(data);
+      setExpanded(true);
+    } catch {
+      setLookupError('Failed to fetch records. Please try again.');
+    } finally {
+      setLookupLoading(false);
+    }
+  };
+
+  const hasSemesters = lookupResult && lookupResult.semesterBreakdown?.length > 0;
+  const hasCGPA = lookupResult && lookupResult.cgpa !== null;
+
+  return (
+    <div style={{
+      borderRadius: 16,
+      border: '1.5px solid #bfdbfe',
+      background: 'linear-gradient(135deg, #eff6ff 0%, #f0fdfa 100%)',
+      overflow: 'hidden',
+      marginBottom: 0,
+      boxShadow: '0 2px 12px rgba(37,99,235,0.06)',
+    }}>
+      {/* Header */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '16px 20px', cursor: 'pointer', userSelect: 'none',
+        }}
+        onClick={() => setExpanded(v => !v)}
+        role="button"
+        aria-expanded={expanded}
+        id="cgpa-lookup-toggle"
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 10, background: '#2563eb',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <Award size={18} color="#fff" />
+          </div>
+          <div>
+            <p style={{ margin: 0, fontWeight: 800, fontSize: 14, color: '#1e3a8a' }}>CGPA Lookup</p>
+            <p style={{ margin: 0, fontSize: 11, color: '#3b82f6', fontWeight: 500 }}>
+              Enter your USN to instantly view your semester history & CGPA
+            </p>
+          </div>
+        </div>
+        <div style={{ color: '#3b82f6', flexShrink: 0 }}>
+          {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+        </div>
+      </div>
+
+      {/* Collapsible body */}
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            key="cgpa-body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div style={{ padding: '0 20px 20px' }}>
+              {/* Search bar */}
+              <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+                <input
+                  id="cgpa-usn-input"
+                  className="input-field"
+                  style={{ fontFamily: 'monospace', flex: 1, background: '#fff' }}
+                  placeholder="Enter your USN — e.g. 4BD24CD001"
+                  value={lookupUsn}
+                  maxLength={10}
+                  onChange={e => {
+                    setLookupUsn(e.target.value.toUpperCase().replace(/\s/g, ''));
+                    setLookupError('');
+                  }}
+                  onKeyDown={e => e.key === 'Enter' && handleLookup()}
+                />
+                <button
+                  id="cgpa-lookup-btn"
+                  className="btn-primary"
+                  onClick={handleLookup}
+                  disabled={lookupLoading}
+                  style={{ padding: '10px 20px', flexShrink: 0, whiteSpace: 'nowrap' }}
+                >
+                  {lookupLoading ? (
+                    <svg className="animate-spin" fill="none" viewBox="0 0 24 24" style={{ width: 16, height: 16 }}>
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                  ) : <Search size={15} />}
+                  {lookupLoading ? 'Looking up…' : 'Look Up'}
+                </button>
+              </div>
+
+              {/* Error */}
+              {lookupError && (
+                <p style={{ fontSize: 12, color: '#dc2626', marginBottom: 12, fontWeight: 600 }}>{lookupError}</p>
+              )}
+
+              {/* Results */}
+              {lookupResult && (
+                <AnimatePresence>
+                  <motion.div
+                    key="cgpa-results"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    {/* No records at all */}
+                    {!hasSemesters && (
+                      <div style={{
+                        padding: '20px', borderRadius: 12, background: '#fff8f0',
+                        border: '1px solid #fed7aa', textAlign: 'center',
+                      }}>
+                        <BookOpen size={28} style={{ color: '#f97316', margin: '0 auto 8px' }} />
+                        <p style={{ fontWeight: 700, color: '#9a3412', margin: '0 0 4px', fontSize: 14 }}>
+                          No Records Found
+                        </p>
+                        <p style={{ fontSize: 12, color: '#c2410c', margin: 0 }}>
+                          No semester results found for <strong>{lookupUsn}</strong>. Calculate your SGPA below and save it to build your CGPA history.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Has semester data */}
+                    {hasSemesters && (
+                      <>
+                        {/* CGPA hero or missing notice */}
+                        <div style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, flexWrap: 'wrap',
+                          padding: '14px 18px', borderRadius: 12,
+                          background: hasCGPA ? '#fff' : '#fffbeb',
+                          border: `1px solid ${hasCGPA ? '#bfdbfe' : '#fde68a'}`,
+                          marginBottom: 16,
+                        }}>
+                          <div>
+                            <p style={{
+                              margin: 0, fontSize: 10, fontWeight: 800, letterSpacing: '.1em',
+                              color: hasCGPA ? '#2563eb' : '#d97706', textTransform: 'uppercase',
+                            }}>
+                              {hasCGPA ? 'Cumulative GPA' : 'Incomplete CGPA'}
+                            </p>
+                            {hasCGPA ? (
+                              <p style={{ margin: '4px 0 0', fontSize: 13, color: '#334155', fontWeight: 600 }}>
+                                Calculated from Sem 1 → Sem {lookupResult.latestSemester} &nbsp;·&nbsp;{' '}
+                                <span style={{ color: '#2563eb' }}>
+                                  {yearSemLabel(lookupResult.latestSemester)}
+                                </span>
+                              </p>
+                            ) : (
+                              <p style={{ margin: '4px 0 0', fontSize: 13, color: '#92400e' }}>
+                                Missing: Semester {lookupResult.missingSemesters.join(', ')} — submit those to complete your CGPA.
+                              </p>
+                            )}
+                          </div>
+                          {hasCGPA && (
+                            <div style={{
+                              minWidth: 110, padding: '10px 16px', borderRadius: 12, textAlign: 'center',
+                              background: 'linear-gradient(135deg, #eff6ff, #e0f2fe)',
+                              border: '1.5px solid #93c5fd',
+                            }}>
+                              <p style={{ margin: 0, fontSize: 30, lineHeight: 1, fontWeight: 900, color: '#1d4ed8' }}>
+                                {lookupResult.cgpa.toFixed(2)}
+                              </p>
+                              <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 800, letterSpacing: '.08em', color: '#64748b' }}>
+                                CGPA / 10
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Semester-by-semester timeline */}
+                        <p style={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 10 }}>
+                          Semester Breakdown
+                        </p>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {lookupResult.semesterBreakdown.map(sem => {
+                            const colors = sgpaColor(sem.sgpa);
+                            return (
+                              <motion.div
+                                key={sem.semester}
+                                initial={{ opacity: 0, scale: 0.92 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                transition={{ delay: sem.semester * 0.04 }}
+                                style={{
+                                  flex: '1 1 calc(25% - 8px)', minWidth: 80,
+                                  padding: '12px 10px', borderRadius: 12, textAlign: 'center',
+                                  background: colors.bg, border: `1.5px solid ${colors.border}`,
+                                }}
+                              >
+                                <p style={{ margin: 0, fontSize: 10, fontWeight: 800, color: colors.color, letterSpacing: '.06em', textTransform: 'uppercase' }}>
+                                  Sem {sem.semester}
+                                </p>
+                                <p style={{ margin: '4px 0 0', fontSize: 22, fontWeight: 900, color: colors.color, lineHeight: 1 }}>
+                                  {sem.sgpa.toFixed(2)}
+                                </p>
+                                <p style={{ margin: '3px 0 0', fontSize: 9, color: colors.color, opacity: 0.75, fontWeight: 600 }}>
+                                  {yearSemLabel(sem.semester)}
+                                </p>
+                              </motion.div>
+                            );
+                          })}
+
+                          {/* Missing semester placeholders */}
+                          {lookupResult.missingSemesters.map(sem => (
+                            <div
+                              key={`missing-${sem}`}
+                              style={{
+                                flex: '1 1 calc(25% - 8px)', minWidth: 80,
+                                padding: '12px 10px', borderRadius: 12, textAlign: 'center',
+                                background: '#f8fafc', border: '1.5px dashed #cbd5e1',
+                              }}
+                            >
+                              <p style={{ margin: 0, fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: '.06em', textTransform: 'uppercase' }}>
+                                Sem {sem}
+                              </p>
+                              <p style={{ margin: '4px 0 0', fontSize: 20, fontWeight: 900, color: '#cbd5e1', lineHeight: 1 }}>—</p>
+                              <p style={{ margin: '3px 0 0', fontSize: 9, color: '#94a3b8', fontWeight: 600 }}>Not submitted</p>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Progress bar */}
+                        {hasCGPA && (
+                          <div style={{ marginTop: 14 }}>
+                            <div style={{ height: 6, background: '#e2e8f0', borderRadius: 999, overflow: 'hidden' }}>
+                              <motion.div
+                                initial={{ width: 0 }}
+                                animate={{ width: `${(lookupResult.cgpa / 10) * 100}%` }}
+                                transition={{ duration: 0.7, ease: 'easeOut' }}
+                                style={{
+                                  height: '100%', borderRadius: 999,
+                                  background: 'linear-gradient(90deg, #3b82f6, #6366f1, #14b8a6)',
+                                }}
+                              />
+                            </div>
+                            <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 5, textAlign: 'right', fontWeight: 600 }}>
+                              {((lookupResult.cgpa / 10) * 100).toFixed(1)}% of maximum GPA
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─── CGPA Card (shown after SGPA calculation) ─────────────────────────────────
+function CGPACard({ cgpa, loading, currentSemester }) {
+  if (!loading && !cgpa) return null;
+
+  const hasCGPA = !loading && cgpa?.cgpa !== null;
+  const year = cgpa ? Math.ceil(cgpa.latestSemester / 2) : null;
+  const semInYear = cgpa ? (cgpa.latestSemester % 2 === 0 ? 2 : 1) : null;
+
+  return (
+    <div className="glass-card" style={{ marginTop: 20, padding: 20, borderColor: '#bfdbfe', background: 'linear-gradient(135deg, #eff6ff 0%, #f0fdfa 100%)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ margin: 0, fontSize: 11, fontWeight: 800, letterSpacing: '.08em', color: '#2563eb', textTransform: 'uppercase' }}>
+            <TrendingUp size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />
+            Automatic CGPA
+          </p>
+          {loading ? (
+            <p style={{ margin: '5px 0 0', fontSize: 13, color: '#64748b' }}>Calculating from saved semester results…</p>
+          ) : hasCGPA ? (
+            <>
+              <p style={{ margin: '5px 0 0', fontSize: 13, color: '#475569', fontWeight: 600 }}>
+                Semester 1 → Semester {cgpa.latestSemester} &nbsp;·&nbsp;
+                <span style={{ color: '#2563eb' }}>Year {year}, {ordinal(semInYear)} Semester</span>
+              </p>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b' }}>
+                Average of {cgpa.latestSemester} semester{cgpa.latestSemester > 1 ? 's' : ''}: {cgpa.semesterBreakdown?.map(s => s.sgpa.toFixed(2)).join(' + ')} = <strong>{cgpa.cgpa.toFixed(2)} ÷ {cgpa.latestSemester}</strong>
+              </p>
+            </>
+          ) : (
+            <p style={{ margin: '5px 0 0', fontSize: 13, color: '#92400e', fontWeight: 600 }}>
+              Add results for Semester {cgpa?.missingSemesters?.join(', ')} to complete the CGPA.
+            </p>
+          )}
+        </div>
+        {hasCGPA && (
+          <div style={{ minWidth: 132, padding: '10px 16px', borderRadius: 12, textAlign: 'center', background: '#fff', border: '1px solid #bfdbfe' }}>
+            <p style={{ margin: 0, fontSize: 28, lineHeight: 1, fontWeight: 900, color: '#1d4ed8' }}>{cgpa.cgpa.toFixed(2)}</p>
+            <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 800, letterSpacing: '.08em', color: '#64748b' }}>CGPA / 10</p>
+          </div>
+        )}
+      </div>
+
+      {/* Mini semester timeline */}
+      {hasCGPA && cgpa.semesterBreakdown?.length > 0 && (
+        <div style={{ marginTop: 14, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {cgpa.semesterBreakdown.map(sem => {
+            const colors = sgpaColor(sem.sgpa);
+            return (
+              <div key={sem.semester} style={{
+                padding: '5px 12px', borderRadius: 8, background: colors.bg,
+                border: `1px solid ${colors.border}`, textAlign: 'center', minWidth: 60,
+              }}>
+                <p style={{ margin: 0, fontSize: 9, fontWeight: 800, color: colors.color, letterSpacing: '.06em' }}>SEM {sem.semester}</p>
+                <p style={{ margin: '2px 0 0', fontSize: 14, fontWeight: 800, color: colors.color }}>{sem.sgpa.toFixed(2)}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
