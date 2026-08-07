@@ -93,36 +93,63 @@ export async function getResultsByUSN(usn, maxResults = 5) {
 export async function getStudentCGPA(usn, selectedSemester = null) {
   if (!db) return { cgpa: null, latestSemester: 0, completedSemesters: [], missingSemesters: [], semesterBreakdown: [] };
 
-  // A student has at most eight semesters. The cap allows retries while keeping
-  // this a small, USN-indexed read instead of a collection scan.
+  const normalizedUsn = usn.toUpperCase().trim();
+
+  // Simple equality query — zero composite index requirement
   const q = query(
     collection(db, RESULTS_COL),
-    where('usn', '==', usn.toUpperCase().trim()),
-    orderBy('timestamp', 'desc'),
-    limit(50)
+    where('usn', '==', normalizedUsn)
   );
+
   const snap = await withTimeout(getDocs(q), 8000, null);
   if (!snap) throw new Error('Unable to load semester results');
 
-  const latestBySemester = new Map();
-  snap.docs.forEach(resultDoc => {
-    const record = resultDoc.data();
-    const sem = Number(record.semester);
-    if (sem >= 1 && sem <= 8 && !latestBySemester.has(sem)) latestBySemester.set(sem, record);
+  if (snap.empty) {
+    return { cgpa: null, latestSemester: 0, completedSemesters: [], missingSemesters: [], semesterBreakdown: [] };
+  }
+
+  // Sort docs by timestamp desc in JS to get latest record per semester
+  const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  docs.sort((a, b) => {
+    const tA = a.timestamp?.toDate ? a.timestamp.toDate().getTime() : 0;
+    const tB = b.timestamp?.toDate ? b.timestamp.toDate().getTime() : 0;
+    return tB - tA;
   });
 
-  const highestSavedSemester = Math.max(0, ...latestBySemester.keys());
-  const latestSemester = Math.max(Number(selectedSemester) || 0, highestSavedSemester);
+  const latestBySemester = new Map();
+  docs.forEach(record => {
+    const sem = Number(record.semester);
+    if (sem >= 1 && sem <= 8 && !latestBySemester.has(sem)) {
+      latestBySemester.set(sem, record);
+    }
+  });
+
+  if (latestBySemester.size === 0) {
+    return { cgpa: null, latestSemester: 0, completedSemesters: [], missingSemesters: [], semesterBreakdown: [] };
+  }
+
   const completedSemesters = [...latestBySemester.keys()].sort((a, b) => a - b);
+  const highestSavedSemester = Math.max(...completedSemesters);
+  const latestSemester = Math.max(Number(selectedSemester) || 0, highestSavedSemester);
+
   const missingSemesters = Array.from({ length: latestSemester }, (_, index) => index + 1)
     .filter(sem => !latestBySemester.has(sem));
 
-  // Build a per-semester breakdown array for the CGPA lookup panel
+  // Build per-semester breakdown array
   const semesterBreakdown = completedSemesters.map(sem => {
     const record = latestBySemester.get(sem);
+    const sgpaVal = Number(record.sgpa || 0);
+
+    // Calculate total credits for this semester if subjects map exists
+    let semCredits = 0;
+    if (record.subjects && typeof record.subjects === 'object') {
+      semCredits = Object.values(record.subjects).reduce((acc, sub) => acc + (Number(sub.credits) || 0), 0);
+    }
+
     return {
       semester: sem,
-      sgpa: parseFloat(Number(record.sgpa || 0).toFixed(2)),
+      sgpa: parseFloat(sgpaVal.toFixed(2)),
+      credits: semCredits || 20, // default 20 if omitted
       year: Math.ceil(sem / 2),
       semInYear: sem % 2 === 0 ? 2 : 1,
       name: record.name || '',
@@ -130,19 +157,26 @@ export async function getStudentCGPA(usn, selectedSemester = null) {
     };
   });
 
-  if (!latestSemester || missingSemesters.length) {
-    return { cgpa: null, latestSemester, completedSemesters, missingSemesters, semesterBreakdown };
-  }
+  // Calculate Weighted CGPA or Simple Average of available semesters
+  let totalWeightedGradePoints = 0;
+  let totalCreditsSum = 0;
 
-  const total = Array.from(latestBySemester.values())
-    .filter(record => Number(record.semester) <= latestSemester)
-    .reduce((sum, record) => sum + Number(record.sgpa || 0), 0);
+  semesterBreakdown.forEach(sem => {
+    const cr = sem.credits > 0 ? sem.credits : 20;
+    totalWeightedGradePoints += sem.sgpa * cr;
+    totalCreditsSum += cr;
+  });
+
+  const calculatedCGPA = totalCreditsSum > 0
+    ? parseFloat((totalWeightedGradePoints / totalCreditsSum).toFixed(2))
+    : parseFloat((semesterBreakdown.reduce((s, sem) => s + sem.sgpa, 0) / semesterBreakdown.length).toFixed(2));
 
   return {
-    cgpa: parseFloat((total / latestSemester).toFixed(2)),
+    cgpa: calculatedCGPA,
     latestSemester,
     completedSemesters,
-    missingSemesters: [],
+    missingSemesters,
+    isPartial: missingSemesters.length > 0,
     semesterBreakdown,
   };
 }

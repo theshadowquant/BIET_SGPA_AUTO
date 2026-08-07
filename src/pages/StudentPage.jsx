@@ -916,49 +916,54 @@ function CGPALookupPanel({ forceExpand = false }) {
                     {/* Has semester data */}
                     {hasSemesters && (
                       <>
-                        {/* CGPA hero or missing notice */}
+                        {/* CGPA hero card */}
                         <div style={{
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                           gap: 16, flexWrap: 'wrap',
-                          padding: '14px 18px', borderRadius: 12,
-                          background: hasCGPA ? '#fff' : '#fffbeb',
-                          border: `1px solid ${hasCGPA ? '#bfdbfe' : '#fde68a'}`,
+                          padding: '16px 20px', borderRadius: 14,
+                          background: 'linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%)',
+                          border: '1.5px solid #bbf7d0',
                           marginBottom: 16,
+                          boxShadow: '0 4px 14px rgba(34,197,94,0.06)',
                         }}>
                           <div>
-                            <p style={{
-                              margin: 0, fontSize: 10, fontWeight: 800, letterSpacing: '.1em',
-                              color: hasCGPA ? '#2563eb' : '#d97706', textTransform: 'uppercase',
-                            }}>
-                              {hasCGPA ? 'Cumulative GPA' : 'Incomplete CGPA'}
-                            </p>
-                            {hasCGPA ? (
-                              <p style={{ margin: '4px 0 0', fontSize: 13, color: '#334155', fontWeight: 600 }}>
-                                Calculated from Sem 1 → Sem {lookupResult.latestSemester} &nbsp;·&nbsp;{' '}
-                                <span style={{ color: '#2563eb' }}>
-                                  {yearSemLabel(lookupResult.latestSemester)}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <p style={{
+                                margin: 0, fontSize: 11, fontWeight: 800, letterSpacing: '.1em',
+                                color: '#166534', textTransform: 'uppercase',
+                              }}>
+                                Cumulative GPA (CGPA)
+                              </p>
+                              {lookupResult.isPartial && (
+                                <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 999, background: '#fef3c7', color: '#b45309', fontWeight: 700, border: '1px solid #fde68a' }}>
+                                  Partial History
                                 </span>
-                              </p>
-                            ) : (
-                              <p style={{ margin: '4px 0 0', fontSize: 13, color: '#92400e' }}>
-                                Missing: Semester {lookupResult.missingSemesters.join(', ')} — submit those to complete your CGPA.
-                              </p>
-                            )}
-                          </div>
-                          {hasCGPA && (
-                            <div style={{
-                              minWidth: 110, padding: '10px 16px', borderRadius: 12, textAlign: 'center',
-                              background: 'linear-gradient(135deg, #eff6ff, #e0f2fe)',
-                              border: '1.5px solid #93c5fd',
-                            }}>
-                              <p style={{ margin: 0, fontSize: 30, lineHeight: 1, fontWeight: 900, color: '#1d4ed8' }}>
-                                {lookupResult.cgpa.toFixed(2)}
-                              </p>
-                              <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 800, letterSpacing: '.08em', color: '#64748b' }}>
-                                CGPA / 10
-                              </p>
+                              )}
                             </div>
-                          )}
+                            <p style={{ margin: '6px 0 0', fontSize: 13, color: '#334155', fontWeight: 600 }}>
+                              {lookupResult.isPartial
+                                ? `Calculated from ${lookupResult.completedSemesters.length} submitted semester(s) · Missing: Sem ${lookupResult.missingSemesters.join(', ')}`
+                                : `Calculated across Sem 1 → Sem ${lookupResult.latestSemester}`}
+                              &nbsp;·&nbsp;{' '}
+                              <span style={{ color: '#2563eb', fontWeight: 700 }}>
+                                {yearSemLabel(lookupResult.latestSemester)}
+                              </span>
+                            </p>
+                          </div>
+
+                          <div style={{
+                            minWidth: 120, padding: '12px 18px', borderRadius: 14, textAlign: 'center',
+                            background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                            color: '#ffffff',
+                            boxShadow: '0 6px 18px rgba(37,99,235,0.25)',
+                          }}>
+                            <p style={{ margin: 0, fontSize: 32, lineHeight: 1, fontWeight: 900, color: '#ffffff' }}>
+                              {lookupResult.cgpa.toFixed(2)}
+                            </p>
+                            <p style={{ margin: '4px 0 0', fontSize: 10, fontWeight: 800, letterSpacing: '.08em', color: '#bfdbfe' }}>
+                              CGPA / 10
+                            </p>
+                          </div>
                         </div>
 
                         {/* Semester-by-semester timeline */}
