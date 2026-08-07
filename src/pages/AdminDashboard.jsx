@@ -6,7 +6,8 @@ import toast from 'react-hot-toast';
 import {
   LogOut, Users, BarChart2, TrendingUp,
   Download, Trash2, ChevronLeft, ChevronRight, RefreshCw,
-  X, AlertTriangle, Activity, Database, BookOpen, Plus, Trash, Save, Award, AlertCircle, Eye, Printer
+  X, AlertTriangle, Activity, Database, BookOpen, Plus, Trash, Save, Award, AlertCircle, Eye, Printer,
+  Settings, ShieldCheck, Check,
 } from 'lucide-react';
 
 import { auth } from '../firebase/config';
@@ -17,7 +18,11 @@ import {
   getLeaderboardStatsBySemester,
 } from '../firebase/services';
 
-import { exportToCSV } from '../utils/exportCSV';
+import { exportAllToCSV } from '../utils/exportCSV';
+import {
+  getExamSession, saveExamSession, getDataIntegrityReport,
+  deleteResultById, exportAllResults,
+} from '../firebase/services';
 import { TableSkeleton, ChartSkeleton } from '../components/SkeletonLoader';
 import SGPADistChart from '../components/charts/SGPADistChart';
 import DailyUsageChart from '../components/charts/DailyUsageChart';
@@ -152,6 +157,24 @@ export default function AdminDashboard() {
   const [semLeaderboard, setSemLeaderboard]             = useState(null);
   const [semLeaderboardLoading, setSemLeaderboardLoading] = useState(false);
 
+  // Rows per page
+  const PAGE_SIZE_OPTIONS = [20, 50, 100, 500, 1000, 2000, 'all'];
+  const [pageSize, setPageSize] = useState(20);
+
+  // Exam Session Manager state
+  const [examSession, setExamSession]       = useState({ examTitle: 'SEE Examination', examMonth: 'June–July', examYear: '2026' });
+  const [examSaving, setExamSaving]         = useState(false);
+  const [examLoaded, setExamLoaded]         = useState(false);
+
+  // Data Cleanup state
+  const [cleanupReport, setCleanupReport]   = useState(null);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupDeleting, setCleanupDeleting] = useState(null);  // ID of record being deleted
+
+  // Exporting state (for full-database export progress)
+  const [exporting, setExporting]           = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+
   // Trigger self-seeding on launch (only if DB is empty)
   useEffect(() => {
     checkAndSeedCurriculum();
@@ -183,7 +206,7 @@ export default function AdminDashboard() {
   }, []);
 
   // Student records loading
-  const loadPage = useCallback(async (filters = {}, cursor = null) => {
+  const loadPage = useCallback(async (filters = {}, cursor = null, pageSz = pageSize) => {
     const requestId = ++recordsRequestRef.current;
     setTableLoading(true);
     try {
@@ -195,6 +218,7 @@ export default function AdminDashboard() {
         sgpaMax: filters.sgpaMax ?? null,
         branchFilter: filters.branch ?? '',
         semesterFilter: filters.semester ?? null,
+        pageSize: pageSz,
       });
       if (requestId !== recordsRequestRef.current) return false;
       setResults(docs); setLastDoc(ld); setHasMore(hm);
@@ -207,7 +231,7 @@ export default function AdminDashboard() {
     } finally {
       if (requestId === recordsRequestRef.current) setTableLoading(false);
     }
-  }, []);
+  }, [pageSize]);
 
   useEffect(() => {
     loadPage(activeFilters, null);
@@ -285,10 +309,84 @@ export default function AdminDashboard() {
     finally { setDeleting(false); }
   };
 
-  const handleExport = () => {
-    if (!results.length) { toast.error('No records to export'); return; }
-    exportToCSV(results, `biet_results_p${currentPage}.csv`);
-    toast.success('CSV exported');
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportProgress(0);
+    const toastId = toast.loading('Fetching all records…');
+    try {
+      const count = await exportAllToCSV(
+        (onProgress) => exportAllResults(activeFilters, onProgress),
+        `biet_results_${Date.now()}.csv`,
+        setExportProgress,
+      );
+      toast.success(`Exported ${count} records to CSV`, { id: toastId });
+    } catch (err) {
+      toast.error('Export failed: ' + (err.message ?? 'Unknown error'), { id: toastId });
+    } finally {
+      setExporting(false);
+      setExportProgress(0);
+    }
+  };
+
+  // ─── Exam Session Manager Handlers ──────────────────────────────────────────
+  useEffect(() => {
+    if (activeTab === 'settings' && !examLoaded) {
+      getExamSession().then(s => {
+        setExamSession(s);
+        setExamLoaded(true);
+      });
+    }
+  }, [activeTab, examLoaded]);
+
+  const handleSaveExamSession = async () => {
+    if (!examSession.examTitle || !examSession.examMonth || !examSession.examYear) {
+      toast.error('All fields are required');
+      return;
+    }
+    setExamSaving(true);
+    try {
+      await saveExamSession(examSession);
+      toast.success('Exam session saved! All report cards will update automatically.');
+    } catch (err) {
+      toast.error('Save failed: ' + (err.message ?? err.code));
+    } finally {
+      setExamSaving(false);
+    }
+  };
+
+  // ─── Data Cleanup Handlers ───────────────────────────────────────────────────
+  const runIntegrityScan = async () => {
+    setCleanupLoading(true);
+    setCleanupReport(null);
+    try {
+      const report = await getDataIntegrityReport();
+      setCleanupReport(report);
+      if (report.stats.flagged === 0) toast.success('Database is clean! No issues found.');
+      else toast(`Found ${report.stats.flagged} flagged record(s).`, { icon: '⚠️' });
+    } catch (err) {
+      toast.error('Scan failed: ' + (err.message ?? err.code));
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
+
+  const handleCleanupDelete = async (id, usn) => {
+    setCleanupDeleting(id);
+    try {
+      await deleteResultById(id);
+      setCleanupReport(prev => ({
+        ...prev,
+        flags: prev.flags.filter(f => f.id !== id),
+        stats: { ...prev.stats, flagged: prev.stats.flagged - 1, total: prev.stats.total - 1 },
+      }));
+      setResults(prev => prev.filter(r => r.id !== id));
+      toast.success(`Deleted ${usn}`);
+    } catch {
+      toast.error('Delete failed');
+    } finally {
+      setCleanupDeleting(null);
+    }
   };
 
   const getBranchName = useCallback((branchId) => (
@@ -477,9 +575,11 @@ export default function AdminDashboard() {
         marginBottom: 24, paddingBottom: 2, flexWrap: 'wrap'
       }} className="no-print">
         {[
-          { id: 'records',    icon: <Database size={15} />,  label: 'Student Records' },
-          { id: 'curriculum', icon: <BookOpen size={15} />,  label: 'Curriculum Manager' },
-          { id: 'analytics',  icon: <BarChart2 size={15} />, label: 'SaaS Leaderboards' },
+          { id: 'records',    icon: <Database size={15} />,   label: 'Student Records' },
+          { id: 'curriculum', icon: <BookOpen size={15} />,   label: 'Curriculum Manager' },
+          { id: 'analytics',  icon: <BarChart2 size={15} />,  label: 'SaaS Leaderboards' },
+          { id: 'settings',   icon: <Settings size={15} />,   label: 'Exam Session' },
+          { id: 'cleanup',    icon: <ShieldCheck size={15} />, label: 'Data Cleanup' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -549,13 +649,37 @@ export default function AdminDashboard() {
                   <p style={S.sectionTitle}>Student Records</p>
                   {hasFilters && <p style={{ fontSize: 12, color: '#3b82f6', marginTop: 2 }}>Filters active</p>}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                  {/* Rows Per Page Selector */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
+                    <span>Rows:</span>
+                    <select
+                      id="rows-per-page-select"
+                      className="input-field"
+                      style={{ padding: '5px 8px', fontSize: 12, cursor: 'pointer', appearance: 'auto', width: 'auto' }}
+                      value={pageSize}
+                      onChange={e => {
+                        const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
+                        setPageSize(val);
+                        loadPage(activeFilters, null, val);
+                        setCurrentPage(1);
+                        setPageStack([]);
+                      }}
+                    >
+                      {PAGE_SIZE_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>
+                          {opt === 'all' ? 'All Records' : `${opt} / page`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
                   <button id="refresh-btn" className="btn-secondary" style={{ padding: '7px 12px' }}
                     onClick={() => loadPage(activeFilters, null)}>
                     <RefreshCw size={14} />
                   </button>
-                  <button id="export-btn" className="btn-secondary" onClick={handleExport}>
-                    <Download size={14} /> Export CSV
+                  <button id="export-btn" className="btn-secondary" onClick={handleExport} disabled={exporting}>
+                    <Download size={14} /> {exporting ? `Exporting (${exportProgress}%)` : 'Export CSV (All)'}
                   </button>
                 </div>
               </div>
@@ -1131,6 +1255,211 @@ export default function AdminDashboard() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ─── TAB 4: EXAM SESSION MANAGER ─── */}
+      {activeTab === 'settings' && (
+        <div style={{ maxWidth: 680, margin: '0 auto' }}>
+          <div className="card" style={{ padding: 28 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, borderBottom: '1px solid #f1f5f9', paddingBottom: 16, marginBottom: 20 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: '#eff6ff', border: '1px solid #bfdbfe', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#2563eb' }}>
+                <Settings size={20} />
+              </div>
+              <div>
+                <p style={{ ...S.sectionTitle, fontSize: 18, margin: 0 }}>Exam Session Configuration</p>
+                <p style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0' }}>
+                  Update the official examination title and date displayed on student report cards &amp; printouts.
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              <div>
+                <label className="form-label" htmlFor="exam-title-input">Examination Title</label>
+                <input
+                  id="exam-title-input"
+                  className="input-field"
+                  placeholder="e.g. SEE Examination"
+                  value={examSession.examTitle}
+                  onChange={e => setExamSession(p => ({ ...p, examTitle: e.target.value }))}
+                />
+                <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>e.g., SEE Examination, Supplementary Examination, Autonomous End-Sem Exam</p>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div>
+                  <label className="form-label" htmlFor="exam-month-input">Exam Month / Duration</label>
+                  <input
+                    id="exam-month-input"
+                    className="input-field"
+                    placeholder="e.g. June–July"
+                    value={examSession.examMonth}
+                    onChange={e => setExamSession(p => ({ ...p, examMonth: e.target.value }))}
+                  />
+                  <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>e.g., June–July, February–March, October</p>
+                </div>
+                <div>
+                  <label className="form-label" htmlFor="exam-year-input">Academic Year</label>
+                  <input
+                    id="exam-year-input"
+                    className="input-field"
+                    placeholder="e.g. 2026"
+                    value={examSession.examYear}
+                    onChange={e => setExamSession(p => ({ ...p, examYear: e.target.value }))}
+                  />
+                  <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>e.g., 2026, 2026–27</p>
+                </div>
+              </div>
+
+              {/* Live Preview Card */}
+              <div style={{
+                background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12,
+                padding: 16, marginTop: 4,
+              }}>
+                <p style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: '.07em', textTransform: 'uppercase', margin: '0 0 8px' }}>
+                  Live Preview (Report Card Title Line)
+                </p>
+                <p style={{ fontSize: 13, fontWeight: 700, color: '#1e3a8a', margin: 0, fontFamily: 'serif' }}>
+                  Provisional Results of B.E. / B.Tech. {examSession.examTitle || 'SEE Examination'}, {examSession.examMonth || 'June–July'} {examSession.examYear || '2026'}
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 8 }}>
+                <button
+                  id="save-exam-session-btn"
+                  className="btn-primary"
+                  onClick={handleSaveExamSession}
+                  disabled={examSaving}
+                  style={{ padding: '11px 28px' }}
+                >
+                  <Save size={16} /> {examSaving ? 'Saving…' : 'Save Configuration'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── TAB 5: DATA CLEANUP TOOLS ─── */}
+      {activeTab === 'cleanup' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          {/* Header Card */}
+          <div className="card" style={{ padding: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: '#fef3c7', border: '1px solid #fde68a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d97706' }}>
+                  <ShieldCheck size={22} />
+                </div>
+                <div>
+                  <p style={{ ...S.sectionTitle, fontSize: 18, margin: 0 }}>Data Integrity &amp; Cleanup Scanner</p>
+                  <p style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0' }}>
+                    Scans all database records for fake names (e.g. &ldquo;Hsh&rdquo;, &ldquo;abc&rdquo;), invalid USNs, duplicate submissions, and out-of-range SGPAs.
+                  </p>
+                </div>
+              </div>
+              <button
+                id="run-integrity-scan-btn"
+                className="btn-primary"
+                onClick={runIntegrityScan}
+                disabled={cleanupLoading}
+                style={{ padding: '11px 24px' }}
+              >
+                <RefreshCw size={15} className={cleanupLoading ? 'animate-spin' : ''} />
+                {cleanupLoading ? 'Scanning Database…' : 'Run Integrity Scan'}
+              </button>
+            </div>
+
+            {/* Scan Statistics Grid */}
+            {cleanupReport && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginTop: 20 }}>
+                <div style={{ padding: 14, background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                  <p style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#0f172a' }}>{cleanupReport.stats.total}</p>
+                  <p style={{ margin: '2px 0 0', fontSize: 11, color: '#64748b', fontWeight: 600 }}>Total Records</p>
+                </div>
+                <div style={{ padding: 14, background: cleanupReport.stats.flagged > 0 ? '#fff7ed' : '#f0fdf4', borderRadius: 10, border: `1px solid ${cleanupReport.stats.flagged > 0 ? '#fed7aa' : '#bbf7d0'}`, textAlign: 'center' }}>
+                  <p style={{ margin: 0, fontSize: 22, fontWeight: 800, color: cleanupReport.stats.flagged > 0 ? '#c2410c' : '#166534' }}>{cleanupReport.stats.flagged}</p>
+                  <p style={{ margin: '2px 0 0', fontSize: 11, color: cleanupReport.stats.flagged > 0 ? '#c2410c' : '#166534', fontWeight: 600 }}>Flagged Issues</p>
+                </div>
+                <div style={{ padding: 14, background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                  <p style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#dc2626' }}>{cleanupReport.stats.invalidNames}</p>
+                  <p style={{ margin: '2px 0 0', fontSize: 11, color: '#64748b', fontWeight: 600 }}>Suspicious Names</p>
+                </div>
+                <div style={{ padding: 14, background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                  <p style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#d97706' }}>{cleanupReport.stats.invalidUSNs}</p>
+                  <p style={{ margin: '2px 0 0', fontSize: 11, color: '#64748b', fontWeight: 600 }}>Invalid USNs</p>
+                </div>
+                <div style={{ padding: 14, background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                  <p style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#2563eb' }}>{cleanupReport.stats.duplicates}</p>
+                  <p style={{ margin: '2px 0 0', fontSize: 11, color: '#64748b', fontWeight: 600 }}>Duplicates</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Flagged Records Table */}
+          {cleanupReport && cleanupReport.flags.length > 0 && (
+            <div className="card" style={{ overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9', background: '#fff7ed' }}>
+                <p style={{ fontWeight: 700, color: '#9a3412', margin: 0, fontSize: 14 }}>
+                  Flagged Records ({cleanupReport.flags.length}) — Review &amp; Clean
+                </p>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                      <th style={{ padding: '12px 16px' }}>Student Name</th>
+                      <th style={{ padding: '12px 16px' }}>USN</th>
+                      <th style={{ padding: '12px 16px' }}>Sem</th>
+                      <th style={{ padding: '12px 16px' }}>SGPA</th>
+                      <th style={{ padding: '12px 16px' }}>Detected Issues</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'right' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cleanupReport.flags.map(item => (
+                      <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '12px 16px', fontWeight: 700, color: '#0f172a' }}>{item.name || '—'}</td>
+                        <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#475569' }}>{item.usn || '—'}</td>
+                        <td style={{ padding: '12px 16px', color: '#64748b' }}>Sem {item.semester || '—'}</td>
+                        <td style={{ padding: '12px 16px', fontWeight: 700, color: '#2563eb' }}>{item.sgpa !== undefined ? Number(item.sgpa).toFixed(2) : '—'}</td>
+                        <td style={{ padding: '12px 16px' }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {item.issues.map((iss, idx) => (
+                              <span key={idx} style={{
+                                padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                                background: iss.type === 'invalid_name' ? '#fef2f2' : iss.type === 'duplicate' ? '#eff6ff' : '#fffbeb',
+                                color: iss.type === 'invalid_name' ? '#dc2626' : iss.type === 'duplicate' ? '#1d4ed8' : '#b45309',
+                                border: `1px solid ${iss.type === 'invalid_name' ? '#fecaca' : iss.type === 'duplicate' ? '#bfdbfe' : '#fde68a'}`,
+                              }}>
+                                {iss.message}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                          <button
+                            id={`cleanup-delete-${item.id}`}
+                            style={{
+                              padding: '5px 12px', borderRadius: 8, border: '1px solid #fecaca',
+                              background: '#fef2f2', color: '#dc2626', fontSize: 12, fontWeight: 700,
+                              cursor: cleanupDeleting === item.id ? 'not-allowed' : 'pointer',
+                            }}
+                            onClick={() => handleCleanupDelete(item.id, item.usn)}
+                            disabled={cleanupDeleting === item.id}
+                          >
+                            <Trash size={13} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />
+                            {cleanupDeleting === item.id ? 'Deleting…' : 'Delete Record'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

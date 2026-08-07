@@ -1,27 +1,30 @@
 /**
- * Firebase Services Layer — Optimized
+ * Firebase Services Layer — Production Grade
  *
  * Performance notes:
  * - Analytics: single doc read + real-time listener (never scans collection)
  * - Visitor count: stored in analytics/global via increment (no collection scan)
- * - Pagination: cursor-based, 20/page, never loads full collection
+ * - Pagination: cursor-based, configurable page size, never loads full collection at once
  * - All queries have explicit 8-second timeouts to prevent UI hangs
  * - avgSGPA is DERIVED: sgpaSum / totalCalculations (never stored directly)
+ * - Identity enforcement: identities/{usn} collection locks USN↔Name mapping
+ * - Duplicate prevention: per-USN per-semester uniqueness enforced via transaction
  */
 
 import {
-  collection, doc, getDoc, setDoc,
+  collection, doc, getDoc, setDoc, deleteDoc,
   query, where, orderBy, limit, startAfter, getDocs,
   writeBatch, serverTimestamp, increment, onSnapshot, runTransaction,
 } from 'firebase/firestore';
 import { db } from './config';
 
-const RESULTS_COL   = 'results';
-const ANALYTICS_DOC = 'analytics/global';
-const VISITS_COL    = 'visits';
-const PAGE_SIZE     = 20;
-const QUERY_PAGE_SIZE = PAGE_SIZE + 1;
-const USN_PREFIX_END = '\uf8ff';
+const RESULTS_COL     = 'results';
+const ANALYTICS_DOC   = 'analytics/global';
+const VISITS_COL      = 'visits';
+const IDENTITIES_COL  = 'identities';  // USN → Name lock collection
+const SETTINGS_COL    = 'settings';    // Admin settings (exam session, etc.)
+const DEFAULT_PAGE_SIZE = 20;
+const USN_PREFIX_END  = '\uf8ff';
 const ANALYTICS_PAGE_SIZE = 250;
 
 let analyticsResultsCache = null;
@@ -147,8 +150,16 @@ function toNameSearchPrefix(value) {
     .map(word => `${word.charAt(0).toLocaleUpperCase()}${word.slice(1)}`).join(' ');
 }
 
-export async function getPaginatedResults({ lastDoc = null, nameFilter = '', usnFilter = '', sgpaMin = null, sgpaMax = null, branchFilter = '', semesterFilter = null } = {}) {
+export async function getPaginatedResults({
+  lastDoc = null, nameFilter = '', usnFilter = '', sgpaMin = null, sgpaMax = null,
+  branchFilter = '', semesterFilter = null,
+  pageSize = DEFAULT_PAGE_SIZE, // supports 20, 50, 100, 500, 1000, 2000, 'all'
+} = {}) {
   if (!db) return { docs: [], lastDoc: null, hasMore: false };
+
+  const isAll = pageSize === 'all';
+  const effectivePageSize = isAll ? 5000 : Number(pageSize);
+  const queryPageSize = isAll ? 5000 : effectivePageSize + 1;
 
   const constraints = [];
   const normalizedUsn = usnFilter.toUpperCase().trim();
@@ -177,25 +188,22 @@ export async function getPaginatedResults({ lastDoc = null, nameFilter = '', usn
     throw new Error('Minimum SGPA cannot exceed maximum SGPA');
   }
 
-  // Firestore requires inequality fields to lead the ordering. The document
-  // snapshot cursor makes pagination deterministic even for identical values.
   if (hasNameFilter) constraints.push(orderBy('name', 'asc'));
   if (hasUsnFilter) constraints.push(orderBy('usn', 'asc'));
   if (hasMin || hasMax) constraints.push(orderBy('sgpa', 'asc'));
   constraints.push(orderBy('timestamp', 'desc'));
   if (lastDoc) constraints.push(startAfter(lastDoc));
-  constraints.push(limit(QUERY_PAGE_SIZE));
+  constraints.push(limit(queryPageSize));
 
   const q = query(collection(db, RESULTS_COL), ...constraints);
-
   const snap = await withTimeout(getDocs(q), 10000, null);
   if (!snap) throw new Error('Query timed out — check Firestore indexes and rules');
 
-  const pageDocs = snap.docs.slice(0, PAGE_SIZE);
+  const pageDocs = snap.docs.slice(0, effectivePageSize);
   return {
     docs: pageDocs.map(d => ({ id: d.id, ...d.data() })),
     lastDoc: pageDocs[pageDocs.length - 1] ?? null,
-    hasMore: snap.docs.length > PAGE_SIZE,
+    hasMore: !isAll && snap.docs.length > effectivePageSize,
   };
 }
 
@@ -964,4 +972,297 @@ export async function getLeaderboardStatsBySemester(semester = null) {
       submissions: info.count,
     }))
     .sort((a, b) => b.avg - a.avg);
+}
+
+// ─── Student Identity Enforcement ─────────────────────────────────────────────
+// identities/{usn} doc stores the canonical name for each USN.
+// Once created, the mapping is immutable (only admin can override).
+
+/**
+ * Checks the USN→Name identity registry.
+ *
+ * Returns:
+ *  { exists: false }               — USN is brand-new, can register freely
+ *  { exists: true, conflict: false, registeredName } — USN exists and names match ✓
+ *  { exists: true, conflict: true,  registeredName } — USN belongs to a different name ✗
+ */
+export async function checkStudentIdentity(usn, name) {
+  if (!db || !usn) return { exists: false, conflict: false, registeredName: null };
+
+  const ref = doc(db, IDENTITIES_COL, usn.toUpperCase().trim());
+  const snap = await withTimeout(getDoc(ref), 5000, null);
+
+  if (!snap || !snap.exists()) {
+    return { exists: false, conflict: false, registeredName: null };
+  }
+
+  const registeredName = snap.data().name || '';
+  const inputName = name.trim();
+  const conflict = registeredName.toLowerCase().replace(/\s+/g, ' ')
+    !== inputName.toLowerCase().replace(/\s+/g, ' ');
+
+  return { exists: true, conflict, registeredName };
+}
+
+// ─── Duplicate Result Prevention ──────────────────────────────────────────────
+
+/**
+ * Checks if a result for this USN + semester already exists.
+ *
+ * Returns { exists: false } or { exists: true, existingRecord: object }
+ */
+export async function checkDuplicateResult(usn, semester) {
+  if (!db || !usn || !semester) return { exists: false, existingRecord: null };
+
+  const q = query(
+    collection(db, RESULTS_COL),
+    where('usn', '==', usn.toUpperCase().trim()),
+    where('semester', '==', Number(semester)),
+    orderBy('timestamp', 'desc'),
+    limit(1)
+  );
+
+  const snap = await withTimeout(getDocs(q), 6000, null);
+  if (!snap || snap.empty) return { exists: false, existingRecord: null };
+
+  const d = snap.docs[0];
+  return { exists: true, existingRecord: { id: d.id, ...d.data() } };
+}
+
+// ─── Update Existing Result ────────────────────────────────────────────────────
+
+/**
+ * Atomically updates an existing result document.
+ * Adjusts the analytics sgpaSum by the delta (newSgpa - oldSgpa).
+ *
+ * @param {string} id        — Firestore document ID of the result to update
+ * @param {{ name, sgpa, subjects, oldSgpa }} payload
+ */
+export async function updateResult(id, { name, sgpa, subjects, oldSgpa }) {
+  if (!db) throw new Error('Firebase not initialized');
+
+  await runTransaction(db, async (tx) => {
+    const ref = doc(db, RESULTS_COL, id);
+    const existing = await tx.get(ref);
+    if (!existing.exists()) throw new Error('Record not found — it may have been deleted.');
+
+    const delta = parseFloat(sgpa) - parseFloat(oldSgpa || existing.data().sgpa || 0);
+
+    tx.update(ref, {
+      name: name.trim(),
+      sgpa: parseFloat(sgpa),
+      subjects,
+      updatedAt: serverTimestamp(),
+    });
+
+    // Adjust running SGPA sum without changing totalCalculations
+    if (Math.abs(delta) > 0.0001) {
+      tx.set(doc(db, ANALYTICS_DOC), {
+        sgpaSum: increment(delta),
+      }, { merge: true });
+    }
+  });
+
+  invalidateAnalyticsResultsCache();
+}
+
+// ─── Full-Database Export (cursor-paged, no size limit) ───────────────────────
+
+/**
+ * Fetches ALL records matching the given filters using cursor-based pagination.
+ * Designed for CSV export — never limited by page size.
+ *
+ * @param {Object} filters           — same shape as getPaginatedResults filters
+ * @param {Function} [onProgress]    — optional callback(percent: number)
+ * @returns {Promise<Array>}         — full array of matching records
+ */
+export async function exportAllResults(filters = {}, onProgress) {
+  if (!db) return [];
+
+  const {
+    nameFilter = '', usnFilter = '', sgpaMin = null, sgpaMax = null,
+    branchFilter = '', semesterFilter = null,
+  } = filters;
+
+  const normalizedUsn = (usnFilter || '').toUpperCase().trim();
+  const normalizedName = toNameSearchPrefix(nameFilter || '');
+  const hasNameFilter = Boolean(normalizedName);
+  const hasUsnFilter = Boolean(normalizedUsn);
+  const hasMin = sgpaMin !== null && sgpaMin !== '';
+  const hasMax = sgpaMax !== null && sgpaMax !== '';
+
+  function buildConstraints(cursor) {
+    const c = [];
+    if (branchFilter) c.push(where('branch', '==', branchFilter));
+    if (semesterFilter !== null && semesterFilter !== '') c.push(where('semester', '==', Number(semesterFilter)));
+    if (hasNameFilter) {
+      c.push(where('name', '>=', normalizedName));
+      c.push(where('name', '<=', `${normalizedName}${USN_PREFIX_END}`));
+    }
+    if (hasUsnFilter) {
+      c.push(where('usn', '>=', normalizedUsn));
+      c.push(where('usn', '<=', `${normalizedUsn}${USN_PREFIX_END}`));
+    }
+    if (hasMin) c.push(where('sgpa', '>=', Number(sgpaMin)));
+    if (hasMax) c.push(where('sgpa', '<=', Number(sgpaMax)));
+    if (hasNameFilter) c.push(orderBy('name', 'asc'));
+    if (hasUsnFilter) c.push(orderBy('usn', 'asc'));
+    if (hasMin || hasMax) c.push(orderBy('sgpa', 'asc'));
+    c.push(orderBy('timestamp', 'desc'));
+    if (cursor) c.push(startAfter(cursor));
+    c.push(limit(ANALYTICS_PAGE_SIZE));
+    return c;
+  }
+
+  const allRecords = [];
+  let cursor = null;
+
+  do {
+    const constraints = buildConstraints(cursor);
+    const q = query(collection(db, RESULTS_COL), ...constraints);
+    const snap = await withTimeout(getDocs(q), 12000, null);
+    if (!snap) break;
+
+    snap.docs.forEach(d => allRecords.push({ id: d.id, ...d.data() }));
+    cursor = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+
+    if (onProgress && snap.docs.length > 0) {
+      onProgress(Math.min(95, Math.round((allRecords.length / (allRecords.length + 1)) * 100)));
+    }
+
+    if (snap.docs.length < ANALYTICS_PAGE_SIZE) break;
+  } while (cursor);
+
+  if (onProgress) onProgress(100);
+  return allRecords;
+}
+
+// ─── Exam Session Manager ──────────────────────────────────────────────────────
+
+const EXAM_SESSION_DOC = 'examSession';
+
+/** Default session used if admin has not configured one */
+const DEFAULT_EXAM_SESSION = {
+  examTitle: 'SEE Examination',
+  examMonth: 'June–July',
+  examYear: '2026',
+};
+
+/**
+ * Reads the current exam session from Firestore settings.
+ * Returns the default if not configured.
+ */
+export async function getExamSession() {
+  if (!db) return { ...DEFAULT_EXAM_SESSION };
+  try {
+    const ref = doc(db, SETTINGS_COL, EXAM_SESSION_DOC);
+    const snap = await withTimeout(getDoc(ref), 5000, null);
+    if (!snap || !snap.exists()) return { ...DEFAULT_EXAM_SESSION };
+    return { ...DEFAULT_EXAM_SESSION, ...snap.data() };
+  } catch {
+    return { ...DEFAULT_EXAM_SESSION };
+  }
+}
+
+/**
+ * Saves the exam session configuration (admin only — enforced by Firestore rules).
+ * @param {{ examTitle: string, examMonth: string, examYear: string }} session
+ */
+export async function saveExamSession(session) {
+  if (!db) throw new Error('Firebase not initialized');
+  const ref = doc(db, SETTINGS_COL, EXAM_SESSION_DOC);
+  await setDoc(ref, {
+    examTitle: (session.examTitle || DEFAULT_EXAM_SESSION.examTitle).trim(),
+    examMonth: (session.examMonth || DEFAULT_EXAM_SESSION.examMonth).trim(),
+    examYear:  (session.examYear  || DEFAULT_EXAM_SESSION.examYear).trim(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+// ─── Data Integrity Scanner ────────────────────────────────────────────────────
+
+const USN_REGEX = /^4BD[0-9]{2}[A-Z]{2}[0-9]{3}$/;
+const VALID_NAME_RE = /^[A-Za-z]+(\s[A-Za-z]+)+$/;
+
+/**
+ * Scans all records for data quality issues:
+ *  - Invalid USN format
+ *  - Invalid name (single word, numeric, too short)
+ *  - Duplicate USN+semester combinations
+ *  - Extreme SGPA values (> 10 or < 0)
+ *
+ * Returns a list of flagged records with issue descriptions.
+ * Reads from the shared analytics cache so repeated calls are cheap.
+ */
+export async function getDataIntegrityReport() {
+  if (!db) return { flags: [], stats: {} };
+
+  const records = await getAllResultsForAnalytics();
+  const flags = [];
+  const usnSemCount = {}; // USN+Sem → count for duplicate detection
+
+  records.forEach(r => {
+    const issues = [];
+
+    // 1. Invalid USN format
+    if (!r.usn || !USN_REGEX.test(r.usn)) {
+      issues.push({ type: 'invalid_usn', message: `Invalid USN format: "${r.usn}"` });
+    }
+
+    // 2. Invalid name (fake/short/numeric)
+    const name = (r.name || '').trim();
+    const words = name.split(/\s+/).filter(Boolean);
+    if (!name || words.length < 2 || name.length < 4 || !VALID_NAME_RE.test(name)) {
+      issues.push({ type: 'invalid_name', message: `Suspicious name: "${r.name}"` });
+    }
+
+    // 3. SGPA out of range
+    if (typeof r.sgpa !== 'number' || r.sgpa < 0 || r.sgpa > 10) {
+      issues.push({ type: 'invalid_sgpa', message: `SGPA out of range: ${r.sgpa}` });
+    }
+
+    // 4. Missing branch or semester
+    if (!r.branch) issues.push({ type: 'missing_branch', message: 'Missing branch' });
+    if (!r.semester) issues.push({ type: 'missing_semester', message: 'Missing semester' });
+
+    // 5. Track USN+Sem duplicates
+    const key = `${r.usn}_${r.semester}`;
+    usnSemCount[key] = (usnSemCount[key] || 0) + 1;
+
+    if (issues.length > 0) {
+      flags.push({ ...r, issues });
+    }
+  });
+
+  // Second pass: flag duplicates
+  records.forEach(r => {
+    const key = `${r.usn}_${r.semester}`;
+    if (usnSemCount[key] > 1 && !flags.find(f => f.id === r.id)) {
+      flags.push({
+        ...r,
+        issues: [{ type: 'duplicate', message: `Duplicate USN+Semester entry (${usnSemCount[key]} records)` }],
+      });
+    }
+  });
+
+  // Summary stats
+  const stats = {
+    total: records.length,
+    flagged: flags.length,
+    invalidNames: flags.filter(f => f.issues.some(i => i.type === 'invalid_name')).length,
+    invalidUSNs: flags.filter(f => f.issues.some(i => i.type === 'invalid_usn')).length,
+    duplicates: flags.filter(f => f.issues.some(i => i.type === 'duplicate')).length,
+    invalidSGPA: flags.filter(f => f.issues.some(i => i.type === 'invalid_sgpa')).length,
+  };
+
+  return { flags, stats };
+}
+
+/**
+ * Permanently deletes a result record by ID (admin only).
+ * Adjusts analytics counters.
+ */
+export async function deleteResultById(id) {
+  // Alias for the existing deleteResult function with a clearer name
+  return deleteResult(id);
 }

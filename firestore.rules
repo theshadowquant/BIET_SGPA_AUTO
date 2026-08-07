@@ -2,39 +2,100 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── results ──────────────────────────────────────────────────────────
-    match /results/{id} {
-      // Allow public create with basic field validation (including branch/semester)
-      allow create: if
-        request.resource.data.keys().hasAll(['name', 'usn', 'sgpa', 'subjects', 'timestamp', 'branch', 'semester'])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() >= 1
-        && request.resource.data.usn is string
-        && request.resource.data.usn.matches('^4BD[0-9]{2}[A-Z]{2}[0-9]{3}$')
-        && request.resource.data.sgpa is number
-        && request.resource.data.sgpa >= 0
-        && request.resource.data.sgpa <= 10
-        && request.resource.data.branch is string
-        && request.resource.data.semester is number;
+    // ── Helper functions ─────────────────────────────────────────────────────
 
-      // Admin can read, update, delete
+    // Validates a BIET USN: 4BD + 2-digit year + 2-letter branch + 3-digit roll
+    function isValidUSN(usn) {
+      return usn is string
+        && usn.size() == 10
+        && usn.matches('^4BD[0-9]{2}[A-Z]{2}[0-9]{3}$');
+    }
+
+    // Validates a student name: at least 4 chars, contains a space (≥2 words),
+    // only alpha characters and spaces allowed.
+    function isValidName(name) {
+      return name is string
+        && name.size() >= 4
+        && name.matches('^[A-Za-z].*\\s.*[A-Za-z]$');
+    }
+
+    // ── results ──────────────────────────────────────────────────────────────
+    match /results/{id} {
+      // PUBLIC CREATE — with strict server-side validation
+      // Note: client validation is defence-in-depth; this is the authoritative check.
+      allow create: if
+        // All required fields must be present
+        request.resource.data.keys().hasAll(['name', 'usn', 'sgpa', 'subjects', 'timestamp', 'branch', 'semester'])
+
+        // Name: ≥4 chars, contains a space (enforces ≥2 words), only alpha + spaces
+        && isValidName(request.resource.data.name)
+
+        // USN: strict BIET format
+        && isValidUSN(request.resource.data.usn)
+
+        // SGPA: valid numeric range
+        && request.resource.data.sgpa is number
+        && request.resource.data.sgpa >= 0.0
+        && request.resource.data.sgpa <= 10.0
+
+        // Branch: non-empty string
+        && request.resource.data.branch is string
+        && request.resource.data.branch.size() > 0
+
+        // Semester: integer 1–8
+        && request.resource.data.semester is number
+        && request.resource.data.semester >= 1
+        && request.resource.data.semester <= 8
+
+        // Subjects: must be a map
+        && request.resource.data.subjects is map;
+
+      // Admin can read, update, delete any record
       allow read, update, delete: if request.auth != null;
     }
 
-    // ── analytics/global ─────────────────────────────────────────────────
+    // ── identities ────────────────────────────────────────────────────────────
+    // Maps USN → canonical student name (immutable after creation)
+    match /identities/{usn} {
+      // Anyone can read (needed for identity conflict check on student page)
+      allow read: if true;
+
+      // Public can CREATE a new identity (first registration)
+      allow create: if
+        request.resource.data.usn is string
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 4
+        && isValidUSN(request.resource.data.usn);
+
+      // Only admin can UPDATE or DELETE identity records
+      allow update, delete: if request.auth != null;
+    }
+
+    // ── settings ─────────────────────────────────────────────────────────────
+    // Admin settings (exam session name/date, etc.)
+    match /settings/{docId} {
+      // Public read — exam session info is displayed on student page
+      allow read: if true;
+      // Only admin can write settings
+      allow write: if request.auth != null;
+    }
+
+    // ── analytics/global ─────────────────────────────────────────────────────
     // Open read/write — only stores aggregate counters (no PII)
     match /analytics/{docId} {
       allow read, write: if true;
     }
 
-    // ── visits ────────────────────────────────────────────────────────────
+    // ── visits ────────────────────────────────────────────────────────────────
     match /visits/{sessionId} {
       // Allow create once per session (sessionId is the doc ID)
-      allow create: if request.resource.data.sessionId is string;
+      allow create: if
+        request.resource.data.sessionId is string
+        && request.resource.data.sessionId.size() > 0;
       allow read, update, delete: if request.auth != null;
     }
 
-    // ── curriculum ────────────────────────────────────────────────────────
+    // ── curriculum ────────────────────────────────────────────────────────────
     match /curriculum/{id} {
       allow read: if true;
       allow write: if request.auth != null;

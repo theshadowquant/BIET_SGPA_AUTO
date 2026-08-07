@@ -5,16 +5,23 @@ import {
   Calculator, Download, Printer, Share2, History,
   ChevronRight, RotateCcw, Clock, CheckCircle2,
   Search, TrendingUp, Award, BookOpen, ChevronDown, ChevronUp,
+  ShieldCheck,
 } from 'lucide-react';
 
 import SubjectForm from '../components/SubjectForm';
 import ResultCard from '../components/ResultCard';
 import SubjectTable from '../components/SubjectTable';
+import DuplicateConfirmModal from '../components/DuplicateConfirmModal';
 
 import { calculateSGPA, validateMarks } from '../utils/calculateSGPA';
+import { validateFullName, validateUSN } from '../utils/validation';
 import { checkRateLimit, recordSubmission, formatCooldown } from '../utils/rateLimit';
 import { getOrCreateSession, getDeviceInfo, markSessionAsRecorded } from '../utils/sessionManager';
-import { saveResult, getResultsByUSN, getStudentCGPA, recordVisit, fetchCurriculum } from '../firebase/services';
+import {
+  saveResult, getResultsByUSN, getStudentCGPA, recordVisit, fetchCurriculum,
+  checkStudentIdentity, checkDuplicateResult, updateResult,
+} from '../firebase/services';
+import { useExamSession } from '../hooks/useExamSession';
 
 const BRANCHES = [
   // Computer Science & IT
@@ -46,8 +53,6 @@ const BRANCHES = [
 ];
 
 const SEMESTERS = [1, 2, 3, 4, 5, 6, 7, 8];
-const USN_PATTERN = /^4BD\d{2}[A-Z]{2}\d{3}$/;
-const USN_FORMAT_MESSAGE = 'Enter a valid USN in the format 4BD24CD001';
 
 const S = {
   page: { maxWidth: 860, margin: '0 auto', padding: '36px 20px' },
@@ -106,6 +111,14 @@ export default function StudentPage() {
   const [cgpa, setCgpa]               = useState(null);
   const [loadingCGPA, setLoadingCGPA] = useState(false);
   const resultRef = useRef(null);
+
+  // Duplicate detection state
+  const [showDupModal, setShowDupModal]   = useState(false);
+  const [dupRecord, setDupRecord]         = useState(null);
+  const [pendingSave, setPendingSave]     = useState(null); // payload to save if user confirms update
+
+  // Exam session (from Firestore settings)
+  const examSession = useExamSession();
 
   // Fetch subjects dynamically from Firestore when branch/semester changes
   useEffect(() => {
@@ -183,10 +196,15 @@ export default function StudentPage() {
 
   const validate = () => {
     const errs = {};
-    if (!studentName.trim()) errs.name = 'Name is required';
-    if (!usn.trim()) errs.usn = 'USN is required';
-    else if (!USN_PATTERN.test(usn.trim())) errs.usn = USN_FORMAT_MESSAGE;
-    
+
+    // Name: use the shared validation utility
+    const nameCheck = validateFullName(studentName);
+    if (!nameCheck.valid) errs.name = nameCheck.error;
+
+    // USN: use the shared validation utility
+    const usnCheck = validateUSN(usn);
+    if (!usnCheck.valid) errs.usn = usnCheck.error;
+
     if (!branch) errs.branch = 'Branch is required';
     if (!semester) errs.semester = 'Semester is required';
 
@@ -214,34 +232,101 @@ export default function StudentPage() {
 
     setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
 
+    // Build subjects payload once (reused for both save and update)
+    const subjectsPayload = {};
+    calculated.breakdown.forEach(s => {
+      const subjectResult = { label: s.label, marks: s.marks, gradePoint: s.gradePoint, grade: s.grade, credits: s.credits, code: s.code };
+      if (s.cieMarks !== undefined && s.seeMarks !== undefined) {
+        subjectResult.cieMarks = s.cieMarks;
+        subjectResult.seeMarks = s.seeMarks;
+        subjectResult.componentFailed = s.componentFailed;
+      }
+      subjectsPayload[s.key] = subjectResult;
+    });
+
     setSaving(true);
     try {
-      const subjectsPayload = {};
-      calculated.breakdown.forEach(s => {
-        const subjectResult = { label: s.label, marks: s.marks, gradePoint: s.gradePoint, grade: s.grade, credits: s.credits, code: s.code };
-        if (s.cieMarks !== undefined && s.seeMarks !== undefined) {
-          subjectResult.cieMarks = s.cieMarks;
-          subjectResult.seeMarks = s.seeMarks;
-          subjectResult.componentFailed = s.componentFailed;
-        }
-        subjectsPayload[s.key] = subjectResult;
-      });
-      await saveResult({ 
-        name: studentName.trim(), 
-        usn: usn.trim(), 
-        branch,
-        semester: Number(semester),
-        sgpa: calculated.sgpa, 
-        subjects: subjectsPayload 
+      // 1. Check student identity (USN ↔ Name lock)
+      const identity = await checkStudentIdentity(usn.trim(), studentName.trim());
+      if (identity.conflict) {
+        setSaving(false);
+        setStep('form');
+        setErrors(prev => ({
+          ...prev,
+          usn: `This USN is already registered to “${identity.registeredName}”. Check your USN or contact admin.`,
+        }));
+        toast.error('Identity conflict — USN belongs to another student.');
+        return;
+      }
+
+      // 2. Check for duplicate USN + semester
+      const dup = await checkDuplicateResult(usn.trim(), Number(semester));
+      if (dup.exists) {
+        setSaving(false);
+        setDupRecord(dup.existingRecord);
+        setPendingSave({ calculated, subjectsPayload, oldSgpa: dup.existingRecord.sgpa });
+        setShowDupModal(true);
+        return;
+      }
+
+      // 3. No duplicate — save new record
+      await performSave(subjectsPayload);
+    } catch (err) {
+      console.error('[Calculate]', err);
+      toast.error('Error during save: ' + (err.code ?? err.message));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** Saves a brand-new result record */
+  const performSave = async (subjectsPayload) => {
+    await saveResult({
+      name: studentName.trim(),
+      usn: usn.trim(),
+      branch,
+      semester: Number(semester),
+      sgpa: result?.sgpa ?? 0,
+      subjects: subjectsPayload,
+    });
+    recordSubmission(usn);
+    setSaved(true);
+    toast.success('Result saved!');
+    loadCGPA(usn, semester);
+  };
+
+  /** Called when user confirms updating an existing record */
+  const handleConfirmUpdate = async () => {
+    if (!pendingSave || !dupRecord) return;
+    setShowDupModal(false);
+    setSaving(true);
+    try {
+      await updateResult(dupRecord.id, {
+        name: studentName.trim(),
+        sgpa: pendingSave.calculated.sgpa,
+        subjects: pendingSave.subjectsPayload,
+        oldSgpa: pendingSave.oldSgpa,
       });
       recordSubmission(usn);
       setSaved(true);
-      toast.success('Result saved!');
+      toast.success('Record updated successfully!');
       loadCGPA(usn, semester);
     } catch (err) {
-      console.error('[Save]', err);
-      toast.error('Calculated OK, but save failed: ' + (err.code ?? err.message));
-    } finally { setSaving(false); }
+      console.error('[Update]', err);
+      toast.error('Update failed: ' + (err.code ?? err.message));
+    } finally {
+      setSaving(false);
+      setDupRecord(null);
+      setPendingSave(null);
+    }
+  };
+
+  const handleCancelUpdate = () => {
+    setShowDupModal(false);
+    setDupRecord(null);
+    setPendingSave(null);
+    setSaved(false);
+    toast('Keeping your previous record.', { icon: 'ℹ️' });
   };
 
   const handleDownloadPDF = () => {
@@ -512,7 +597,7 @@ export default function StudentPage() {
                   <div className="print-header-text">
                     <h1>Bapuji Institute of Engineering and Technology, Davanagere</h1>
                     <p className="print-subheader">( An Autonomous Institute Affiliated to Visvesvaraya Technological University, Belagavi )</p>
-                    <p className="print-title">Provisional Results of B.E. / B.Tech. Autonomous Examination June/July 2026</p>
+                    <p className="print-title">Provisional Results of B.E. / B.Tech. {examSession.examTitle}, {examSession.examMonth} {examSession.examYear}</p>
                   </div>
                 </div>
 
@@ -628,6 +713,13 @@ export default function StudentPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Duplicate Result Confirmation Modal */}
+      <DuplicateConfirmModal
+        existing={dupRecord}
+        onUpdate={handleConfirmUpdate}
+        onCancel={handleCancelUpdate}
+      />
     </main>
   );
 }
