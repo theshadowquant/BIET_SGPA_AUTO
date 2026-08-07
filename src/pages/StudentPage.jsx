@@ -12,6 +12,7 @@ import SubjectForm from '../components/SubjectForm';
 import ResultCard from '../components/ResultCard';
 import SubjectTable from '../components/SubjectTable';
 import DuplicateConfirmModal from '../components/DuplicateConfirmModal';
+import CGPACalculatorView from '../components/CGPACalculatorView';
 
 import { calculateSGPA, validateMarks } from '../utils/calculateSGPA';
 import { validateFullName, validateUSN } from '../utils/validation';
@@ -419,19 +420,21 @@ export default function StudentPage() {
         </button>
       </div>
 
-      {/* ── CGPA Calculator Panel (Prominent when in CGPA mode or collapsed in SGPA mode) ── */}
-      {(calcMode === 'cgpa' || true) && (
-        <motion.div className="no-print" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, delay: 0.1 }} style={{ marginBottom: 24 }}>
-          <CGPALookupPanel forceExpand={calcMode === 'cgpa'} />
+      {/* ── Mode 1: Auto CGPA Calculator ── */}
+      {calcMode === 'cgpa' && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+          <CGPACalculatorView />
         </motion.div>
       )}
 
-      <AnimatePresence mode="wait">
+      {/* ── Mode 2: SGPA Calculator ── */}
+      {calcMode === 'sgpa' && (
+        <AnimatePresence mode="wait">
 
-        {/* ── FORM STEP ── */}
-        {step === 'form' && (
-          <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ ...S.stack, marginTop: 20 }}>
+          {/* ── FORM STEP ── */}
+          {step === 'form' && (
+            <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{ ...S.stack, marginTop: 10 }}>
 
             {/* Divider */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -752,6 +755,7 @@ export default function StudentPage() {
           </motion.div>
         )}
       </AnimatePresence>
+      )}
 
       {/* Duplicate Result Confirmation Modal */}
       <DuplicateConfirmModal
