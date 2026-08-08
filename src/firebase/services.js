@@ -75,6 +75,49 @@ export async function saveResult({ name, usn, branch, semester, sgpa, subjects }
   return resultRef.id;
 }
 
+// ─── Save CGPA Calculation ───────────────────────────────────────────────────
+export async function saveCGPAResult({ name, usn, branch, cgpa, entries }) {
+  if (!db) return null;
+  const resultRef = doc(collection(db, RESULTS_COL));
+
+  const subjectsMap = {};
+  if (Array.isArray(entries)) {
+    entries.forEach(e => {
+      subjectsMap[`sem_${e.semester}`] = {
+        name: e.label,
+        sgpa: e.sgpa,
+        grade: e.sgpa >= 9 ? 'O' : e.sgpa >= 8 ? 'A+' : e.sgpa >= 7 ? 'A' : 'B+',
+        gradePoints: e.sgpa,
+      };
+    });
+  }
+
+  const latestSem = entries && entries.length > 0 ? Math.max(...entries.map(e => e.semester)) : 8;
+
+  const batch = writeBatch(db);
+  batch.set(resultRef, {
+    name: (name || 'Student').trim(),
+    usn: (usn || 'N/A').toUpperCase().trim(),
+    branch: branch || 'cs-ds',
+    semester: Number(latestSem),
+    sgpa: parseFloat(cgpa),
+    cgpa: parseFloat(cgpa),
+    isCGPA: true,
+    subjects: subjectsMap,
+    timestamp: serverTimestamp(),
+  });
+
+  const analyticsRef = doc(db, ANALYTICS_DOC);
+  batch.set(analyticsRef, {
+    totalCalculations: increment(1),
+    sgpaSum:           increment(parseFloat(cgpa)),
+  }, { merge: true });
+
+  await batch.commit();
+  invalidateAnalyticsResultsCache();
+  return resultRef.id;
+}
+
 // ─── Get Results by USN ───────────────────────────────────────────────────────
 export async function getResultsByUSN(usn, maxResults = 10) {
   if (!db || !usn) return [];

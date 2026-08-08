@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Award, Calculator, Search, Printer, RotateCcw, BookOpen, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getStudentCGPA } from '../firebase/services';
+import { getStudentCGPA, saveCGPAResult } from '../firebase/services';
 
 const SEMESTER_NAMES = [
   '1st Semester',
@@ -16,10 +16,11 @@ const SEMESTER_NAMES = [
 ];
 
 export default function CGPACalculatorView() {
-  const [usn, setUsn]             = useState('');
-  const [fetching, setFetching]   = useState(false);
-  const [semSgpas, setSemSgpas]   = useState({ 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '', 8: '' });
-  const [cgpaResult, setCgpaResult] = useState(null);
+  const [studentName, setStudentName] = useState('');
+  const [usn, setUsn]                 = useState('');
+  const [fetching, setFetching]       = useState(false);
+  const [semSgpas, setSemSgpas]       = useState({ 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '', 8: '' });
+  const [cgpaResult, setCgpaResult]   = useState(null);
   const reportRef = useRef(null);
 
   // Handle USN Auto Fetch from Firestore
@@ -86,11 +87,27 @@ export default function CGPACalculatorView() {
     const now = new Date();
     const formattedDate = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
 
+    const usnClean = usnCode.trim().toUpperCase();
+
     setCgpaResult({
       finalCgpa,
       entries: validEntries,
       dateStr: formattedDate,
-      usn: usnCode.trim().toUpperCase(),
+      usn: usnClean,
+      name: studentName.trim() || 'Student',
+    });
+
+    // Save CGPA calculation to Firestore so it reflects in Admin Portal
+    saveCGPAResult({
+      name: studentName.trim() || (usnClean ? `Student (${usnClean})` : 'Student'),
+      usn: usnClean || 'N/A',
+      branch: 'cs-ds',
+      cgpa: finalCgpa,
+      entries: validEntries,
+    }).then(() => {
+      toast.success('CGPA Calculated & Saved to Records!');
+    }).catch(err => {
+      console.warn('[saveCGPAResult]', err);
     });
 
     window.scrollTo({ top: 400, behavior: 'smooth' });
@@ -152,6 +169,38 @@ export default function CGPACalculatorView() {
 
       {/* ── Manual 8-Semester Inputs Card (Replica of Screenshot 2) ── */}
       <div className="card no-print" style={{ padding: 28, marginBottom: 28 }}>
+        
+        {/* Name & USN fields */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 20 }}>
+          <div>
+            <label className="form-label" htmlFor="cgpa-student-name" style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
+              Full Name
+            </label>
+            <input
+              id="cgpa-student-name"
+              className="input-field"
+              placeholder="e.g. Lekhan"
+              value={studentName}
+              onChange={e => setStudentName(e.target.value)}
+              style={{ fontSize: 14 }}
+            />
+          </div>
+          <div>
+            <label className="form-label" htmlFor="cgpa-student-usn" style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
+              USN
+            </label>
+            <input
+              id="cgpa-student-usn"
+              className="input-field"
+              placeholder="e.g. 4BD24CD001"
+              value={usn}
+              maxLength={10}
+              onChange={e => setUsn(e.target.value.toUpperCase().replace(/\s/g, ''))}
+              style={{ fontSize: 14, fontFamily: 'monospace' }}
+            />
+          </div>
+        </div>
+
         <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 20px', fontWeight: 500 }}>
           (Leave blank if you do not have SGPA for a semester)
         </p>
