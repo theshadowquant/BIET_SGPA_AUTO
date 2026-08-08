@@ -48,9 +48,11 @@ service cloud.firestore {
 
         // Subjects: must be a map
         && request.resource.data.subjects is map;
+      // Public read access for CGPA and USN lookups
+      allow read: if true;
 
-      // Admin can read, update, delete any record
-      allow read, update, delete: if request.auth != null;
+      // Admin can update or delete any record
+      allow update, delete: if request.auth != null;
     }
 
     // ── identities ────────────────────────────────────────────────────────────

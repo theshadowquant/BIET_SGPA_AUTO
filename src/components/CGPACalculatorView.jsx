@@ -29,8 +29,8 @@ export default function CGPACalculatorView() {
       toast.error('Please enter a USN to auto-fetch results');
       return;
     }
-    if (!/^4BD\d{2}[A-Z]{2}\d{3}$/.test(trimmed)) {
-      toast.error('Please enter a valid BIET USN (e.g. 4BD24CD001)');
+    if (!/^4BD[0-9]{2}[A-Za-z]{2}[0-9]{3}$/i.test(trimmed) && trimmed.length !== 10) {
+      toast.error('Please enter a valid USN (e.g. 4BD24CD001)');
       return;
     }
 
@@ -46,11 +46,11 @@ export default function CGPACalculatorView() {
         toast.success(`Fetched ${data.semesterBreakdown.length} semester record(s) for ${trimmed}!`);
         calculateFromSgpas(newSgpas, trimmed);
       } else {
-        toast('No saved semester records found for this USN. Enter SGPAs manually below.', { icon: 'ℹ️' });
+        toast('No saved semester records found for this USN. You can enter SGPAs manually below.', { icon: 'ℹ️' });
       }
     } catch (err) {
-      console.error(err);
-      toast.error('Could not fetch USN records. Enter SGPAs manually.');
+      console.warn('[AutoFetch]', err);
+      toast('No previous records found or network delay. You can enter SGPAs manually below.', { icon: 'ℹ️' });
     } finally {
       setFetching(false);
     }
