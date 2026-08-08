@@ -4,69 +4,30 @@ service cloud.firestore {
 
     // ── Helper functions ─────────────────────────────────────────────────────
 
-    // Validates a BIET USN: 4BD + 2-digit year + 2-letter branch + 3-digit roll
     function isValidUSN(usn) {
       return usn is string
         && usn.size() == 10
         && usn.matches('^4BD[0-9]{2}[A-Z]{2}[0-9]{3}$');
     }
 
-    // Validates a student name: at least 2 chars, letters, spaces, and dots allowed.
-    // Supports single-word Indian names (e.g. Shankar, Malleswari) as well as multi-word names.
     function isValidName(name) {
       return name is string
-        && name.size() >= 2
-        && name.matches('^[A-Za-z]+([\\s.][A-Za-z]+)*$');
+        && name.size() >= 2;
     }
 
     // ── results ──────────────────────────────────────────────────────────────
     match /results/{id} {
-      // PUBLIC CREATE — with strict server-side validation
-      allow create: if
-        // All required fields must be present
-        request.resource.data.keys().hasAll(['name', 'usn', 'sgpa', 'subjects', 'timestamp', 'branch', 'semester'])
+      // Public read, create, update access for student calculations & updates
+      allow read, create, update: if true;
 
-        // Name: ≥2 chars, valid letter format
-        && isValidName(request.resource.data.name)
-
-        // USN: strict BIET format
-        && isValidUSN(request.resource.data.usn)
-
-        // SGPA: valid numeric range
-        && request.resource.data.sgpa is number
-        && request.resource.data.sgpa >= 0.0
-        && request.resource.data.sgpa <= 10.0
-
-        // Branch: non-empty string
-        && request.resource.data.branch is string
-        && request.resource.data.branch.size() > 0
-
-        // Semester: integer 1–8
-        && request.resource.data.semester is number
-        && request.resource.data.semester >= 1
-        && request.resource.data.semester <= 8
-
-        // Subjects: must be a map
-        && request.resource.data.subjects is map;
-      // Public read access for CGPA and USN lookups
-      allow read: if true;
-
-      // Admin can update or delete any record
-      allow update, delete: if request.auth != null;
+      // Admin can delete any record
+      allow delete: if request.auth != null;
     }
 
     // ── identities ────────────────────────────────────────────────────────────
-    // Maps USN → canonical student name (immutable after creation)
     match /identities/{usn} {
-      allow read: if true;
-
-      allow create: if
-        request.resource.data.usn is string
-        && request.resource.data.name is string
-        && isValidName(request.resource.data.name)
-        && isValidUSN(request.resource.data.usn);
-
-      allow update, delete: if request.auth != null;
+      allow read, create, update: if true;
+      allow delete: if request.auth != null;
     }
 
     // ── admins ────────────────────────────────────────────────────────────────
