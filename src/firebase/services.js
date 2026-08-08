@@ -76,17 +76,24 @@ export async function saveResult({ name, usn, branch, semester, sgpa, subjects }
 }
 
 // ─── Get Results by USN ───────────────────────────────────────────────────────
-export async function getResultsByUSN(usn, maxResults = 5) {
-  if (!db) return [];
+export async function getResultsByUSN(usn, maxResults = 10) {
+  if (!db || !usn) return [];
+  const normalizedUsn = usn.toUpperCase().trim();
   const q = query(
     collection(db, RESULTS_COL),
-    where('usn', '==', usn.toUpperCase().trim()),
-    orderBy('timestamp', 'desc'),
-    limit(maxResults)
+    where('usn', '==', normalizedUsn)
   );
   const snap = await withTimeout(getDocs(q), 6000, null);
-  if (!snap) return [];
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (!snap || snap.empty) return [];
+
+  const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  docs.sort((a, b) => {
+    const tA = a.timestamp?.toDate ? a.timestamp.toDate().getTime() : 0;
+    const tB = b.timestamp?.toDate ? b.timestamp.toDate().getTime() : 0;
+    return tB - tA;
+  });
+
+  return docs.slice(0, maxResults);
 }
 
 // ─── Student CGPA (latest saved result for each completed semester) ───────────

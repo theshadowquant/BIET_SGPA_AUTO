@@ -172,18 +172,36 @@ export default function StudentPage() {
   }, [fieldErrors]);
 
   const handleUSN = (v) => {
-    setUsn(v.toUpperCase().replace(/\s/g, ''));
+    const val = v.toUpperCase().replace(/\s/g, '');
+    setUsn(val);
     if (errors.usn) setErrors(p => { const n = { ...p }; delete n.usn; return n; });
   };
 
-  const fetchHistory = async (usnVal) => {
-    if (!USN_PATTERN.test(usnVal.trim())) return;
+  const fetchHistory = useCallback(async (usnVal) => {
+    const trimmed = (usnVal || '').toUpperCase().replace(/\s/g, '');
+    if (!trimmed || trimmed.length < 5) {
+      setHistory([]);
+      setShowHistory(false);
+      return;
+    }
     try {
-      const records = await getResultsByUSN(usnVal);
+      const records = await getResultsByUSN(trimmed, 10);
       setHistory(records);
       setShowHistory(records.length > 0);
-    } catch { /* silent */ }
-  };
+      if (records.length > 0) {
+        if (!studentName && records[0].name) setName(records[0].name);
+        if (!branch && records[0].branch) setBranch(records[0].branch);
+      }
+    } catch (err) {
+      console.warn('[fetchHistory]', err);
+    }
+  }, [studentName, branch]);
+
+  useEffect(() => {
+    if (usn && usn.length >= 7) {
+      fetchHistory(usn);
+    }
+  }, [usn, fetchHistory]);
 
   const loadCGPA = async (usnValue, currentSemester) => {
     setLoadingCGPA(true);
@@ -515,22 +533,34 @@ export default function StudentPage() {
             <AnimatePresence>
               {showHistory && history.length > 0 && (
                 <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                  className="card" style={{ padding: 18, borderColor: '#bfdbfe' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                    <History size={15} color="#3b82f6" />
-                    <span style={{ fontSize: 13, fontWeight: 600, color: '#1d4ed8' }}>Past Results for {usn}</span>
+                  className="card" style={{ padding: 18, borderColor: '#bfdbfe', background: 'linear-gradient(135deg, #eff6ff 0%, #ffffff 100%)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <History size={16} color="#2563eb" />
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#1e3a8a' }}>
+                        Saved Calculations for USN {usn.toUpperCase()} ({history.length})
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 11, color: '#64748b', fontWeight: 500 }}>
+                      Latest records found in database
+                    </span>
                   </div>
-                  <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 4 }}>
+                  <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6 }}>
                     {history.map(h => (
                       <div key={h.id} style={{
-                        flexShrink: 0, minWidth: 80, padding: '10px 14px', borderRadius: 10, textAlign: 'center',
-                        background: '#eff6ff', border: '1px solid #bfdbfe',
+                        flexShrink: 0, minWidth: 110, padding: '10px 14px', borderRadius: 12, textAlign: 'center',
+                        background: '#ffffff', border: '1.5px solid #bfdbfe', boxShadow: '0 2px 6px rgba(37,99,235,0.06)'
                       }}>
-                        <p style={{ fontSize: 18, fontWeight: 800, color: '#1d4ed8', margin: 0 }}>{h.sgpa?.toFixed(2)}</p>
-                        <p style={{ fontSize: 11, color: '#94a3b8', margin: '2px 0 0' }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, color: '#2563eb', textTransform: 'uppercase', letterSpacing: '.05em', background: '#eff6ff', padding: '2px 6px', borderRadius: 6 }}>
+                          {h.semester ? `${ordinal(h.semester)} Sem` : 'Semester'}
+                        </span>
+                        <p style={{ fontSize: 20, fontWeight: 900, color: '#0f172a', margin: '6px 0 2px' }}>
+                          {h.sgpa?.toFixed(2)}
+                        </p>
+                        <p style={{ fontSize: 10, color: '#64748b', margin: 0, fontWeight: 600 }}>
                           {h.timestamp?.toDate
                             ? h.timestamp.toDate().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
-                            : '—'}
+                            : 'Saved'}
                         </p>
                       </div>
                     ))}
