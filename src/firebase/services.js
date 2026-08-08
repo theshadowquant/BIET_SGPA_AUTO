@@ -1030,15 +1030,18 @@ export async function checkStudentIdentity(usn, name) {
   const snap = await withTimeout(getDoc(ref), 5000, null);
 
   if (!snap || !snap.exists()) {
-    return { exists: false, conflict: false, registeredName: null };
+    // Register identity cleanly on first submission
+    setDoc(ref, { usn: usn.toUpperCase().trim(), name: name.trim(), createdAt: serverTimestamp() }, { merge: true }).catch(() => {});
+    return { exists: false, conflict: false, registeredName: name.trim() };
   }
 
-  const registeredName = snap.data().name || '';
-  const inputName = name.trim();
-  const conflict = registeredName.toLowerCase().replace(/\s+/g, ' ')
-    !== inputName.toLowerCase().replace(/\s+/g, ' ');
+  // Always update to latest provided name gracefully without conflict errors
+  const registeredName = snap.data().name || name.trim();
+  if (name.trim() && name.trim().toLowerCase() !== registeredName.toLowerCase()) {
+    setDoc(ref, { name: name.trim(), updatedAt: serverTimestamp() }, { merge: true }).catch(() => {});
+  }
 
-  return { exists: true, conflict, registeredName };
+  return { exists: true, conflict: false, registeredName: name.trim() };
 }
 
 // ─── Duplicate Result Prevention ──────────────────────────────────────────────

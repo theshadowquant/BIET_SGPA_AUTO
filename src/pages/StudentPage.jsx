@@ -248,18 +248,8 @@ export default function StudentPage() {
 
     setSaving(true);
     try {
-      // 1. Check student identity (USN ↔ Name lock)
-      const identity = await checkStudentIdentity(usn.trim(), studentName.trim());
-      if (identity.conflict) {
-        setSaving(false);
-        setStep('form');
-        setErrors(prev => ({
-          ...prev,
-          usn: `This USN is already registered to “${identity.registeredName}”. Check your USN or contact admin.`,
-        }));
-        toast.error('Identity conflict — USN belongs to another student.');
-        return;
-      }
+      // 1. Register student name gracefully
+      await checkStudentIdentity(usn.trim(), studentName.trim()).catch(() => {});
 
       // 2. Check for duplicate USN + semester
       const dup = await checkDuplicateResult(usn.trim(), Number(semester));
