@@ -239,20 +239,21 @@ export default function StudentPage() {
     return Object.keys(errs).length === 0 && valid;
   };
 
-  const handleCalculate = async () => {
+  const handleCalculate = () => {
     if (!validate()) { toast.error('Please fix the errors above'); return; }
 
     const { allowed, remainingMs } = checkRateLimit(usn);
     if (!allowed) { toast.error(`Wait ${formatCooldown(remainingMs)} before resubmitting`); return; }
 
+    // 1. Instant calculation (0ms delay)
     const calculated = calculateSGPA(marks, subjects, { useComponentPassing: true });
     setResult(calculated);
     setStep('result');
-    setSaved(false);
+    setSaved(true);
 
-    setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+    setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 
-    // Build subjects payload once (reused for both save and update)
+    // 2. Build subjects payload once
     const subjectsPayload = {};
     calculated.breakdown.forEach(s => {
       const subjectResult = { label: s.label, marks: s.marks, gradePoint: s.gradePoint, grade: s.grade, credits: s.credits, code: s.code };
@@ -264,84 +265,23 @@ export default function StudentPage() {
       subjectsPayload[s.key] = subjectResult;
     });
 
-    setSaving(true);
-    try {
-      // 1. Register student name gracefully
-      await checkStudentIdentity(usn.trim(), studentName.trim()).catch(() => {});
-
-      // 2. Check for duplicate USN + semester
-      const dup = await checkDuplicateResult(usn.trim(), Number(semester));
-      if (dup.exists) {
-        setSaving(false);
-        setDupRecord(dup.existingRecord);
-        setPendingSave({ calculated, subjectsPayload, oldSgpa: dup.existingRecord.sgpa });
-        setShowDupModal(true);
-        return;
-      }
-
-      // 3. No duplicate — save new record
-      await performSave(subjectsPayload);
-    } catch (err) {
-      console.error('[Calculate]', err);
-      toast.error('Error during save: ' + (err.code ?? err.message));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  /** Saves a brand-new result record */
-  const performSave = async (subjectsPayload) => {
-    try {
-      await saveResult({
-        name: studentName.trim(),
-        usn: usn.trim(),
-        branch,
-        semester: Number(semester),
-        sgpa: result?.sgpa ?? 0,
-        subjects: subjectsPayload,
-      });
-      toast.success('Result saved!');
-    } catch (err) {
-      console.warn('[performSave]', err);
-      if (err?.code === 'resource-exhausted' || err?.message?.includes('resource-exhausted')) {
-        toast('Result calculated! (Firebase daily quota hit, but your result is ready)', { icon: 'ℹ️' });
-      } else {
-        toast.error('Save notice: ' + (err?.code ?? err?.message));
-      }
-    }
-    recordSubmission(usn);
-    setSaved(true);
-    loadCGPA(usn, semester);
-  };
-
-  /** Called when user confirms updating an existing record */
-  const handleConfirmUpdate = async () => {
-    if (!pendingSave || !dupRecord) return;
-    setShowDupModal(false);
-    setSaving(true);
-    try {
-      await updateResult(dupRecord.id, {
-        name: studentName.trim(),
-        sgpa: pendingSave.calculated.sgpa,
-        subjects: pendingSave.subjectsPayload,
-        oldSgpa: pendingSave.oldSgpa,
-      });
-      toast.success('Record updated successfully!');
-    } catch (err) {
-      console.warn('[handleConfirmUpdate]', err);
-      if (err?.code === 'resource-exhausted' || err?.message?.includes('resource-exhausted')) {
-        toast('Record updated! (Firebase daily quota hit, but your result is ready)', { icon: 'ℹ️' });
-      } else {
-        toast.error('Update notice: ' + (err?.code ?? err?.message));
-      }
-    } finally {
+    // 3. Save new submission to Firestore asynchronously in background (instant UI response)
+    saveResult({
+      name: studentName.trim(),
+      usn: usn.trim(),
+      branch,
+      semester: Number(semester),
+      sgpa: calculated.sgpa,
+      subjects: subjectsPayload,
+    }).then(() => {
       recordSubmission(usn);
-      setSaved(true);
       loadCGPA(usn, semester);
-      setSaving(false);
-      setDupRecord(null);
-      setPendingSave(null);
-    }
+    }).catch(err => {
+      console.warn('[BackgroundSave]', err);
+    });
+
+    // Register identity gracefully in background
+    checkStudentIdentity(usn.trim(), studentName.trim()).catch(() => {});
   };
 
   const handleCancelUpdate = () => {
@@ -790,13 +730,7 @@ export default function StudentPage() {
       </AnimatePresence>
       )}
 
-      {/* Duplicate Result Confirmation Modal */}
-      <DuplicateConfirmModal
-        existing={dupRecord}
-        onUpdate={handleConfirmUpdate}
-        onCancel={handleCancelUpdate}
-      />
-    </main>
+      </main>
   );
 }
 
