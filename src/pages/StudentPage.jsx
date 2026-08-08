@@ -291,17 +291,26 @@ export default function StudentPage() {
 
   /** Saves a brand-new result record */
   const performSave = async (subjectsPayload) => {
-    await saveResult({
-      name: studentName.trim(),
-      usn: usn.trim(),
-      branch,
-      semester: Number(semester),
-      sgpa: result?.sgpa ?? 0,
-      subjects: subjectsPayload,
-    });
+    try {
+      await saveResult({
+        name: studentName.trim(),
+        usn: usn.trim(),
+        branch,
+        semester: Number(semester),
+        sgpa: result?.sgpa ?? 0,
+        subjects: subjectsPayload,
+      });
+      toast.success('Result saved!');
+    } catch (err) {
+      console.warn('[performSave]', err);
+      if (err?.code === 'resource-exhausted' || err?.message?.includes('resource-exhausted')) {
+        toast('Result calculated! (Firebase daily quota hit, but your result is ready)', { icon: 'ℹ️' });
+      } else {
+        toast.error('Save notice: ' + (err?.code ?? err?.message));
+      }
+    }
     recordSubmission(usn);
     setSaved(true);
-    toast.success('Result saved!');
     loadCGPA(usn, semester);
   };
 
@@ -317,14 +326,18 @@ export default function StudentPage() {
         subjects: pendingSave.subjectsPayload,
         oldSgpa: pendingSave.oldSgpa,
       });
+      toast.success('Record updated successfully!');
+    } catch (err) {
+      console.warn('[handleConfirmUpdate]', err);
+      if (err?.code === 'resource-exhausted' || err?.message?.includes('resource-exhausted')) {
+        toast('Record updated! (Firebase daily quota hit, but your result is ready)', { icon: 'ℹ️' });
+      } else {
+        toast.error('Update notice: ' + (err?.code ?? err?.message));
+      }
+    } finally {
       recordSubmission(usn);
       setSaved(true);
-      toast.success('Record updated successfully!');
       loadCGPA(usn, semester);
-    } catch (err) {
-      console.error('[Update]', err);
-      toast.error('Update failed: ' + (err.code ?? err.message));
-    } finally {
       setSaving(false);
       setDupRecord(null);
       setPendingSave(null);

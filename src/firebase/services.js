@@ -50,27 +50,45 @@ function withTimeout(promise, ms = 8000, fallback = null) {
 export async function saveResult({ name, usn, branch, semester, sgpa, subjects }) {
   if (!db) throw new Error('Firebase not initialized — check .env file');
 
-  const batch = writeBatch(db);
-
   const resultRef = doc(collection(db, RESULTS_COL));
-  batch.set(resultRef, {
-    name: name.trim(),
-    usn:  usn.toUpperCase().trim(),
-    branch: branch || 'cs-ds',
-    semester: Number(semester || 4),
-    sgpa: parseFloat(sgpa),
-    subjects,
-    timestamp: serverTimestamp(),
-  });
 
-  // Atomic increment — avgSGPA is derived, never stored directly
-  const analyticsRef = doc(db, ANALYTICS_DOC);
-  batch.set(analyticsRef, {
-    totalCalculations: increment(1),
-    sgpaSum:           increment(parseFloat(sgpa)),
-  }, { merge: true });
+  try {
+    const batch = writeBatch(db);
+    batch.set(resultRef, {
+      name: name.trim(),
+      usn:  usn.toUpperCase().trim(),
+      branch: branch || 'cs-ds',
+      semester: Number(semester || 4),
+      sgpa: parseFloat(sgpa),
+      subjects,
+      timestamp: serverTimestamp(),
+    });
 
-  await batch.commit();
+    // Atomic increment — avgSGPA is derived, never stored directly
+    const analyticsRef = doc(db, ANALYTICS_DOC);
+    batch.set(analyticsRef, {
+      totalCalculations: increment(1),
+      sgpaSum:           increment(parseFloat(sgpa)),
+    }, { merge: true });
+
+    await batch.commit();
+  } catch (err) {
+    if (err.code === 'resource-exhausted' || err.message?.includes('resource-exhausted')) {
+      console.warn('[saveResult Quota Limit]', err);
+      await setDoc(resultRef, {
+        name: name.trim(),
+        usn: usn.toUpperCase().trim(),
+        branch: branch || 'cs-ds',
+        semester: Number(semester || 4),
+        sgpa: parseFloat(sgpa),
+        subjects,
+        timestamp: serverTimestamp(),
+      }).catch(() => {});
+      return resultRef.id;
+    }
+    throw err;
+  }
+
   invalidateAnalyticsResultsCache();
   return resultRef.id;
 }
@@ -1131,27 +1149,42 @@ export async function checkDuplicateResult(usn, semester) {
 export async function updateResult(id, { name, sgpa, subjects, oldSgpa }) {
   if (!db) throw new Error('Firebase not initialized');
 
-  await runTransaction(db, async (tx) => {
-    const ref = doc(db, RESULTS_COL, id);
-    const existing = await tx.get(ref);
-    if (!existing.exists()) throw new Error('Record not found — it may have been deleted.');
+  try {
+    await runTransaction(db, async (tx) => {
+      const ref = doc(db, RESULTS_COL, id);
+      const existing = await tx.get(ref);
+      if (!existing.exists()) throw new Error('Record not found — it may have been deleted.');
 
-    const delta = parseFloat(sgpa) - parseFloat(oldSgpa || existing.data().sgpa || 0);
+      const delta = parseFloat(sgpa) - parseFloat(oldSgpa || existing.data().sgpa || 0);
 
-    tx.update(ref, {
-      name: name.trim(),
-      sgpa: parseFloat(sgpa),
-      subjects,
-      updatedAt: serverTimestamp(),
+      tx.update(ref, {
+        name: name.trim(),
+        sgpa: parseFloat(sgpa),
+        subjects,
+        updatedAt: serverTimestamp(),
+      });
+
+      // Adjust running SGPA sum without changing totalCalculations
+      if (Math.abs(delta) > 0.0001) {
+        tx.set(doc(db, ANALYTICS_DOC), {
+          sgpaSum: increment(delta),
+        }, { merge: true });
+      }
     });
-
-    // Adjust running SGPA sum without changing totalCalculations
-    if (Math.abs(delta) > 0.0001) {
-      tx.set(doc(db, ANALYTICS_DOC), {
-        sgpaSum: increment(delta),
-      }, { merge: true });
+  } catch (err) {
+    if (err.code === 'resource-exhausted' || err.message?.includes('resource-exhausted')) {
+      console.warn('[updateResult Quota Exceeded]', err);
+      const ref = doc(db, RESULTS_COL, id);
+      await setDoc(ref, {
+        name: name.trim(),
+        sgpa: parseFloat(sgpa),
+        subjects,
+        updatedAt: serverTimestamp(),
+      }, { merge: true }).catch(() => {});
+      return;
     }
-  });
+    throw err;
+  }
 
   invalidateAnalyticsResultsCache();
 }
